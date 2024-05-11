@@ -314,5 +314,11 @@ export const generateTitle = async (
 		throw error;
 	}
 
-	return res?.choices[0]?.message?.content ?? 'New Chat';
+	if (res.choices) {
+		return res?.choices[0]?.message?.content ?? 'New Chat';
+	} else if (res.message) {
+		res.message.content;
+	} else {
+		throw Error('Error parsing response from OpenAI');
+	}
 };

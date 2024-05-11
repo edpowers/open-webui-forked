@@ -11,7 +11,6 @@
 		OPENAI_API_BASE_URL,
 		WEBUI_API_BASE_URL
 	} from '$lib/constants';
-
 	import { WEBUI_NAME, config, user, models, settings } from '$lib/stores';
 
 	import { cancelOllamaRequest, generateChatCompletion } from '$lib/apis/ollama';
@@ -20,8 +19,6 @@
 	import { splitStream } from '$lib/utils';
 	import ChatCompletion from '$lib/components/playground/ChatCompletion.svelte';
 	import Selector from '$lib/components/chat/ModelSelector/Selector.svelte';
-
-	import { reformatJSON } from './format_response';
 
 	const i18n = getContext('i18n');
 
@@ -106,8 +103,6 @@
 					break;
 				}
 
-
-				/*
 				try {
 					let lines = value.split('\n');
 
@@ -133,11 +128,6 @@
 				}
 
 				scrollToBottom();
-				*/
-
-				const receivedJSON = JSON.parse(value);
-				const reformattedJSON = reformatJSON(receivedJSON);
-				responseMessage.content += reformattedJSON.choices[0].message.content;
 			}
 		}
 	};
@@ -168,7 +158,6 @@
 		);
 
 		let responseMessage;
-
 		if (messages.at(-1)?.role === 'assistant') {
 			responseMessage = messages.at(-1);
 		} else {
@@ -196,8 +185,6 @@
 						controller.abort('User: Stop Response');
 					}
 
-					console.log(messages)
-
 					currentRequestId = null;
 					break;
 				}
@@ -211,7 +198,6 @@
 							if (line === 'data: [DONE]') {
 								// responseMessage.done = true;
 								messages = messages;
-								console.log(messages);
 							} else {
 								let data = JSON.parse(line.replace(/^data: /, ''));
 								console.log(data);

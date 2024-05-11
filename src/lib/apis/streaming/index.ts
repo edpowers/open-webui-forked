@@ -44,8 +44,12 @@ async function* openAIStreamToIterator(
 						const data = JSON.parse(line.replace(/^data: /, ''));
 						console.log(data);
 
-						yield { done: false, value: data.choices?.[0]?.delta?.content ?? '' };
-					} catch (e) {
+						if (data.choices) {
+						  yield { done: false, value: data.choices?.[0]?.delta?.content ?? '' };
+						} else if (data.message) {
+						  yield { done: false, value: data.message.content };
+						}
+					  } catch (e) {
 						console.error('Error extracting delta from SSE event:', e);
 					}
 				}
