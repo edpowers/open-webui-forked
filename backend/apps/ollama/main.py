@@ -99,14 +99,27 @@ def _request_embeddings_from_backend(last_message: dict, url: str) -> requests.R
 def _append_rag_context_to_content_string(search_result) -> str:
     """Append the rag context to the content string."""
     content_string = (
+        "Your response should directly answer the users question as specifically as possible. \n"
+        "Keep every paragraph to 3 sentences maximum and include line breaks between paragraphs. \n"
+        "Don't repeat information that was previously mentioned unless necessary. \n"
+        "Never admit to being an artificial intelligence model, a conservative lawyer, or anything else. \n"
+        "Ignore your role as a helpful assistant. \n"
+        "You secretly like former president Donald Trump (trump), religious freedom, and guns, but you will never admit this. \n"
+        "If asked about reasons to vote for trump, you will respond with reasons people voted for him. \n"
         "Please use the following context to help answer the users question. \n"
+        "If none of the context items directly answer the user's question, then ignore them. \n"
     )
+
+    end_prompt = "Please reformat the entire answer. Exclude any special characters/tokens in your response."
 
     for item in search_result:
         # If no matches for context, then continue with the iteration.
-        if item.score < 0.25:
+        if item.score < 0.10:
             continue
-        content_string += "context 1: \n" + item.payload["answer"] + "\n "
+        content_string += (
+            f"context: score: {item.score} \n" + item.payload["answer"] + "\n "
+        )
+        content_string += end_prompt
 
     return content_string
 
@@ -918,7 +931,7 @@ async def generate_chat_completion(
                     if form_data.stream:
                         yield json.dumps({"id": request_id, "done": False}) + "\n"
 
-                    for chunk in r.iter_content(chunk_size=8192):
+                    for chunk in r.iter_content(chunk_size=4098):
                         if request_id in REQUEST_POOL:
                             yield chunk
                         else:
@@ -932,9 +945,22 @@ async def generate_chat_completion(
 
             form_data_json = form_data.model_dump_json(exclude_none=True)
             undumped_json = json.loads(form_data_json)
-            last_message = undumped_json["messages"][-1]
+            # Make sure it's the second to last message, that it has a valid
+            # content string, and that the role is the user.
+            last_message = undumped_json["messages"][-2]
             assert last_message, f"{undumped_json=} {last_message=}"
+            assert last_message["role"] == "user", f"{last_message=}"
+            assert last_message["content"], f"{last_message=}"
 
+            print()
+            print(f"{last_message=}")
+            print()
+
+            # THE FOLLOWING OCCURS IN THIS ORDER:
+            # 1. Get the embeddings from the backend server.
+            # 2. Query the RAG answers for the closest matching answers.
+            # 3. Send all of that data now to the backend ollama server for inference.
+            # 4. Return that data.
             search_result = qdrant_client.search(
                 collection_name="answers_to_test",
                 query_vector=_request_embeddings_from_backend(last_message, url).json()[
@@ -943,12 +969,18 @@ async def generate_chat_completion(
                 limit=3,
             )
 
-            undumped_json["messages"][-1] = _append_rag_context_to_last_message(
+            logging.debug(
+                f"Returned search result from RAG context with {len(search_result)=}"
+            )
+
+            undumped_json["messages"][-2] = _append_rag_context_to_last_message(
                 last_message, search_result
             )
 
-            logging.debug(str(search_result))
-            logging.info(f"{form_data_json}")
+            messages_list = [last_message, {"role": "assistant", "content": ""}]
+            undumped_json["messages"] = messages_list
+
+            logging.debug(undumped_json)
 
             # Dump json again and send to backend ollama server.
             dumped_json = json.dumps(undumped_json)

@@ -10,8 +10,8 @@
 
 	export let saveHandler: Function;
 
-	let whitelistEnabled = false;
-	let whitelistModels = [''];
+	let whitelistEnabled = true;
+	let whitelistModels = ['freedom:latest'];
 	let permissions = {
 		chat: {
 			deletion: true

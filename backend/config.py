@@ -338,36 +338,33 @@ OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 ####################################
 
 ENABLE_SIGNUP = os.environ.get("ENABLE_SIGNUP", "True").lower() == "true"
-DEFAULT_MODELS = os.environ.get("DEFAULT_MODELS", None)
+DEFAULT_MODELS = os.environ.get("DEFAULT_MODELS", "freedom:latest")
 
 
-DEFAULT_PROMPT_SUGGESTIONS = (
-    CONFIG_DATA["ui"]["prompt_suggestions"]
-    if "ui" in CONFIG_DATA
-    and "prompt_suggestions" in CONFIG_DATA["ui"]
-    and type(CONFIG_DATA["ui"]["prompt_suggestions"]) is list
-    else [
-        {
-            "title": ["Help me study", "vocabulary for a college entrance exam"],
-            "content": "Help me study vocabulary: write a sentence for me to fill in the blank, and I'll try to pick the correct option.",
-        },
-        {
-            "title": ["Give me ideas", "for what to do with my kids' art"],
-            "content": "What are 5 creative things I could do with my kids' art? I don't want to throw them away, but it's also so much clutter.",
-        },
-        {
-            "title": ["Tell me a fun fact", "about the Roman Empire"],
-            "content": "Tell me a random fun fact about the Roman Empire",
-        },
-        {
-            "title": ["Show me a code snippet", "of a website's sticky header"],
-            "content": "Show me a code snippet of a website's sticky header in CSS and JavaScript.",
-        },
-    ]
-)
+DEFAULT_PROMPT_SUGGESTIONS = [
+    {
+        "title": ["What are my rights", "if I get arrested by the police?"],
+        "content": "If I get arrested by the police, what are my constitutional rights? What should I do or not do in that situation?",
+    },
+    {
+        "title": ["Is freedom of speech", "protected for all kinds of speech?"],
+        "content": "I know freedom of speech is a First Amendment right, but are there any limits to it? Is all speech protected under the Constitution?",
+    },
+    {
+        "title": [
+            "What does the Second Amendment",
+            "actually say about gun rights?",
+        ],
+        "content": "I hear a lot of debate about gun control and the Second Amendment. What does the text of the Second Amendment actually say and mean regarding the right to bear arms?",
+    },
+    {
+        "title": ["What is due process", "and how does it protect me?"],
+        "content": "I've heard the term 'due process' but I'm not really sure what it means. How does due process protect my rights under the Constitution?",
+    },
+]
 
 
-DEFAULT_USER_ROLE = os.getenv("DEFAULT_USER_ROLE", "pending")
+DEFAULT_USER_ROLE = os.getenv("DEFAULT_USER_ROLE", "user")
 
 USER_PERMISSIONS_CHAT_DELETION = (
     os.environ.get("USER_PERMISSIONS_CHAT_DELETION", "True").lower() == "true"
@@ -446,7 +443,7 @@ PDF_EXTRACT_IMAGES = os.environ.get("PDF_EXTRACT_IMAGES", "False").lower() == "t
 RAG_EMBEDDING_MODEL = os.environ.get(
     "RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
 )
-log.info(f"Embedding model set: {RAG_EMBEDDING_MODEL}"),
+(log.info(f"Embedding model set: {RAG_EMBEDDING_MODEL}"),)
 
 RAG_EMBEDDING_MODEL_AUTO_UPDATE = (
     os.environ.get("RAG_EMBEDDING_MODEL_AUTO_UPDATE", "").lower() == "true"
@@ -458,7 +455,7 @@ RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE = (
 
 RAG_RERANKING_MODEL = os.environ.get("RAG_RERANKING_MODEL", "")
 if not RAG_RERANKING_MODEL == "":
-    log.info(f"Reranking model set: {RAG_RERANKING_MODEL}"),
+    (log.info(f"Reranking model set: {RAG_RERANKING_MODEL}"),)
 
 RAG_RERANKING_MODEL_AUTO_UPDATE = (
     os.environ.get("RAG_RERANKING_MODEL_AUTO_UPDATE", "").lower() == "true"

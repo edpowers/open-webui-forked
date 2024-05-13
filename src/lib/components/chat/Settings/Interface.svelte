@@ -316,20 +316,20 @@
 								<div class="flex border-b dark:border-gray-600 w-full">
 									<input
 										class="px-3 py-1.5 text-xs w-full bg-transparent outline-none border-r dark:border-gray-600"
-										placeholder={$i18n.t('Title (e.g. Tell me a fun fact)')}
+										placeholder={$i18n.t('Title (e.g. What are my rights)')}
 										bind:value={prompt.title[0]}
 									/>
 
 									<input
 										class="px-3 py-1.5 text-xs w-full bg-transparent outline-none border-r dark:border-gray-600"
-										placeholder={$i18n.t('Subtitle (e.g. about the Roman Empire)')}
+										placeholder={$i18n.t('Subtitle (e.g. if I get arrested by the police)')}
 										bind:value={prompt.title[1]}
 									/>
 								</div>
 
 								<input
 									class="px-3 py-1.5 text-xs w-full bg-transparent outline-none border-r dark:border-gray-600"
-									placeholder={$i18n.t('Prompt (e.g. Tell me a fun fact about the Roman Empire)')}
+									placeholder={$i18n.t('Prompt (e.g. If I get arrested by the police, what are my constitutional rights? What should I do or not do in that situation?)')}
 									bind:value={prompt.content}
 								/>
 							</div>
