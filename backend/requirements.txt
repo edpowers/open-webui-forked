@@ -57,3 +57,8 @@ pyjwt[crypto]
 
 black
 langfuse
+
+websockets
+aioredis
+redis>=4.2.0rc1
+qdrant-client

@@ -23,6 +23,10 @@ import requests
 import json
 import uuid
 import aiohttp
+
+from qdrant_client import QdrantClient
+from redis import asyncio as aioredis
+
 import asyncio
 import logging
 from urllib.parse import urlparse
@@ -55,6 +59,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+qdrant_client = QdrantClient(
+    location=os.environ["QDRANT_LOCATION_URI"],
+    api_key=os.environ["QDRANT_API_KEY"],
+)
 
 app.state.ENABLE_MODEL_FILTER = ENABLE_MODEL_FILTER
 app.state.MODEL_FILTER_LIST = MODEL_FILTER_LIST
@@ -62,13 +70,54 @@ app.state.MODEL_FILTER_LIST = MODEL_FILTER_LIST
 app.state.OLLAMA_BASE_URLS = OLLAMA_BASE_URLS
 app.state.MODELS = {}
 
-
 REQUEST_POOL = []
 
 
 # TODO: Implement a more intelligent load balancing mechanism for distributing requests among multiple backend instances.
 # Current implementation uses a simple round-robin approach (random.choice). Consider incorporating algorithms like weighted round-robin,
 # least connections, or least response time for better resource utilization and performance optimization.
+
+
+async def write_to_redis(key: str, value: str) -> None:
+    redis = await aioredis.from_url(os.environ.get("REDIS_URL", ""), db=4)
+    await redis.set(key, value)
+    await redis.close()
+
+
+def _request_embeddings_from_backend(last_message: dict, url: str) -> requests.Response:
+    return requests.request(
+        method="POST",
+        url=f"{url}/embeddings",
+        json={"text_to_encode": json.dumps(last_message["content"])},
+    )
+
+
+# Create a template function that adds on the context from the RAG model.
+# This will be used to add the context to the question.
+
+
+def _append_rag_context_to_content_string(search_result) -> str:
+    """Append the rag context to the content string."""
+    content_string = (
+        "Please use the following context to help answer the users question. \n"
+    )
+
+    for item in search_result:
+        # If no matches for context, then continue with the iteration.
+        if item.score < 0.25:
+            continue
+        content_string += "context 1: \n" + item.payload["answer"] + "\n "
+
+    return content_string
+
+
+def _append_rag_context_to_last_message(last_message: dict, search_result) -> dict:
+    """Append the rag context to the last message."""
+    last_message["content"] += "\n" + _append_rag_context_to_content_string(
+        search_result
+    )
+
+    return last_message
 
 
 @app.middleware("http")
@@ -206,9 +255,7 @@ async def get_ollama_tags(
 @app.get("/api/version")
 @app.get("/api/version/{url_idx}")
 async def get_ollama_versions(url_idx: Optional[int] = None):
-
     if url_idx == None:
-
         # returns lowest version
         tasks = [fetch_url(f"{url}/api/version") for url in app.state.OLLAMA_BASE_URLS]
         responses = await asyncio.gather(*tasks)
@@ -661,7 +708,6 @@ def generate_ollama_embeddings(
     form_data: GenerateEmbeddingsForm,
     url_idx: Optional[int] = None,
 ):
-
     log.info(f"generate_ollama_embeddings {form_data}")
 
     if url_idx == None:
@@ -732,7 +778,6 @@ async def generate_completion(
     url_idx: Optional[int] = None,
     user=Depends(get_current_user),
 ):
-
     if url_idx == None:
         model = form_data.model
 
@@ -835,7 +880,6 @@ async def generate_chat_completion(
     url_idx: Optional[int] = None,
     user=Depends(get_current_user),
 ):
-
     if url_idx == None:
         model = form_data.model
 
@@ -886,17 +930,44 @@ async def generate_chat_completion(
                         if request_id in REQUEST_POOL:
                             REQUEST_POOL.remove(request_id)
 
+            form_data_json = form_data.model_dump_json(exclude_none=True)
+            undumped_json = json.loads(form_data_json)
+            last_message = undumped_json["messages"][-1]
+            assert last_message, f"{undumped_json=} {last_message=}"
+
+            search_result = qdrant_client.search(
+                collection_name="answers_to_test",
+                query_vector=_request_embeddings_from_backend(last_message, url).json()[
+                    "embedding"
+                ],
+                limit=3,
+            )
+
+            undumped_json["messages"][-1] = _append_rag_context_to_last_message(
+                last_message, search_result
+            )
+
+            logging.debug(str(search_result))
+            logging.info(f"{form_data_json}")
+
+            # Dump json again and send to backend ollama server.
+            dumped_json = json.dumps(undumped_json)
+
             r = requests.request(
                 method="POST",
                 url=f"{url}/api/chat",
-                data=form_data.model_dump_json(exclude_none=True).encode(),
+                data=dumped_json,
                 stream=True,
             )
 
             r.raise_for_status()
 
+            stream_content_data = stream_content()
+
+            asyncio.run(write_to_redis(str(form_data), str(stream_content_data)))
+
             return StreamingResponse(
-                stream_content(),
+                stream_content_data,
                 status_code=r.status_code,
                 headers=dict(r.headers),
             )
@@ -944,7 +1015,6 @@ async def generate_openai_chat_completion(
     url_idx: Optional[int] = None,
     user=Depends(get_current_user),
 ):
-
     if url_idx == None:
         model = form_data.model
 
@@ -975,9 +1045,9 @@ async def generate_openai_chat_completion(
             def stream_content():
                 try:
                     if form_data.stream:
-                        yield json.dumps(
-                            {"request_id": request_id, "done": False}
-                        ) + "\n"
+                        yield (
+                            json.dumps({"request_id": request_id, "done": False}) + "\n"
+                        )
 
                     for chunk in r.iter_content(chunk_size=8192):
                         if request_id in REQUEST_POOL:
@@ -1112,7 +1182,6 @@ async def download_model(
     form_data: UrlForm,
     url_idx: Optional[int] = None,
 ):
-
     allowed_hosts = ["https://huggingface.co/", "https://github.com/"]
 
     if not any(form_data.url.startswith(host) for host in allowed_hosts):
