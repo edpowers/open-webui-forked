@@ -116,7 +116,7 @@
 				}
 			} else {
 				toast.error(
-					$i18n.t('Uh-oh! There was an issue connecting to {{provider}}.', { provider: 'llama' })
+					$i18n.t('Uh-oh! There was an issue connecting to model {{provider}}.', { provider: 'llama' })
 				);
 			}
 		}

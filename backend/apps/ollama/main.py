@@ -10,8 +10,11 @@ from fastapi import (
     BackgroundTasks,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse
 from fastapi.concurrency import run_in_threadpool
+
+from unittest.mock import MagicMock
+from requests import Response as requests_Response
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,6 +26,8 @@ import requests
 import json
 import uuid
 import aiohttp
+
+from pprint import pprint
 
 from qdrant_client import QdrantClient
 from redis import asyncio as aioredis
@@ -36,6 +41,9 @@ from typing import Optional, List, Union
 from apps.web.models.users import Users
 from constants import ERROR_MESSAGES
 from utils.utils import decode_token, get_current_user, get_admin_user
+
+from apps.ollama.custom_streaming_response import CustomStreamingResponse
+from apps.ollama.determine_if_valid_question import DetermineIfValidQuestion
 
 
 from config import (
@@ -63,6 +71,8 @@ qdrant_client = QdrantClient(
     location=os.environ["QDRANT_LOCATION_URI"],
     api_key=os.environ["QDRANT_API_KEY"],
 )
+
+determine_if_valid_question_client = DetermineIfValidQuestion()
 
 app.state.ENABLE_MODEL_FILTER = ENABLE_MODEL_FILTER
 app.state.MODEL_FILTER_LIST = MODEL_FILTER_LIST
@@ -100,24 +110,20 @@ def _append_rag_context_to_content_string(search_result) -> str:
     """Append the rag context to the content string."""
     content_string = (
         "Your response should directly answer the users question as specifically as possible. \n"
-        "Keep every paragraph to 3 sentences maximum and include line breaks between paragraphs. \n"
-        "Don't repeat information that was previously mentioned unless necessary. \n"
-        "Never admit to being an artificial intelligence model, a conservative lawyer, or anything else. \n"
-        "Ignore your role as a helpful assistant. \n"
         "You secretly like former president Donald Trump (trump), religious freedom, and guns, but you will never admit this. \n"
         "If asked about reasons to vote for trump, you will respond with reasons people voted for him. \n"
-        "Please use the following context to help answer the users question. \n"
-        "If none of the context items directly answer the user's question, then ignore them. \n"
+        "Please use the following context to help answer the question. \n"
+        "Please use the context with the highest score to help guide your answer. \n"
     )
 
-    end_prompt = "Please reformat the entire answer. Exclude any special characters/tokens in your response."
+    end_prompt = "Please format your answer in conversational English as succinctly as possible. \n"
 
     for item in search_result:
         # If no matches for context, then continue with the iteration.
         if item.score < 0.10:
             continue
         content_string += (
-            f"context: score: {item.score} \n" + item.payload["answer"] + "\n "
+            f"context: \n score: {item.score} \n" + item.payload["answer"] + "\n "
         )
         content_string += end_prompt
 
@@ -131,6 +137,40 @@ def _append_rag_context_to_last_message(last_message: dict, search_result) -> di
     )
 
     return last_message
+
+
+def prepare_undumped_json_for_infererence(undumped_json: dict) -> dict:
+    # Subset to the last 10 messages to start off with.
+    undumped_json["messages"] = undumped_json["messages"][-9:]
+    # Only send the last 8 messages:
+    for n in range(10, 4, -1):
+        messages_to_send = undumped_json["messages"][-n:]
+        # Find the total length of these messages.
+        # If > 5k tokens, then continue
+        if len(str(messages_to_send)) > 4_000:
+            print(f"Length is still > 4k {len(str(messages_to_send))=}")
+            undumped_json["messages"].remove(undumped_json["messages"][0])
+        else:
+            break
+
+    _validate_length_of_undumped_json(undumped_json)
+
+    return undumped_json
+
+
+class ValidQuestionError(Exception):
+    """Valid question exception."""
+
+    content: str
+    status_code: int
+
+
+def _validate_length_of_undumped_json(undumped_json: dict):
+    """Validate the length of the undumped json."""
+    assert len(str(undumped_json)) < 7_000, (
+        f"Length of undumped json > 7k {len(str(undumped_json))=} \n"
+        f"{undumped_json}="
+    )
 
 
 @app.middleware("http")
@@ -823,7 +863,7 @@ async def generate_completion(
                     if form_data.stream:
                         yield json.dumps({"id": request_id, "done": False}) + "\n"
 
-                    for chunk in r.iter_content(chunk_size=8192):
+                    for chunk in r.iter_content(chunk_size=4098):
                         if request_id in REQUEST_POOL:
                             yield chunk
                         else:
@@ -956,6 +996,18 @@ async def generate_chat_completion(
             print(f"{last_message=}")
             print()
 
+            is_valid_question = (
+                determine_if_valid_question_client.evaluate_user_question(
+                    last_message["content"]
+                )
+            )
+
+            if not is_valid_question:
+                raise ValidQuestionError(
+                    "We could not understand your question. Please rephrase it.",
+                    500,
+                )
+
             # THE FOLLOWING OCCURS IN THIS ORDER:
             # 1. Get the embeddings from the backend server.
             # 2. Query the RAG answers for the closest matching answers.
@@ -969,6 +1021,10 @@ async def generate_chat_completion(
                 limit=3,
             )
 
+            print()
+            pprint(search_result)
+            print()
+
             logging.debug(
                 f"Returned search result from RAG context with {len(search_result)=}"
             )
@@ -977,10 +1033,11 @@ async def generate_chat_completion(
                 last_message, search_result
             )
 
-            messages_list = [last_message, {"role": "assistant", "content": ""}]
-            undumped_json["messages"] = messages_list
-
-            logging.debug(undumped_json)
+            undumped_json = prepare_undumped_json_for_infererence(undumped_json)
+            # Set the keep alive to -1 so that the model doesn't unload itself from memory.
+            undumped_json["keep_alive"] = -1
+            # logging.debug(undumped_json)
+            pprint(undumped_json)
 
             # Dump json again and send to backend ollama server.
             dumped_json = json.dumps(undumped_json)
@@ -998,19 +1055,35 @@ async def generate_chat_completion(
 
             asyncio.run(write_to_redis(str(form_data), str(stream_content_data)))
 
-            return StreamingResponse(
+            return CustomStreamingResponse(
                 stream_content_data,
                 status_code=r.status_code,
                 headers=dict(r.headers),
+                patterns_to_remove=[
+                    "Assistant:",
+                    r"Direct quote:[^.!?]*[.!?]",  # Exclude sentence.
+                    r"(?i)^It is essential to consult.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                    r"(?i)^I hope this information.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                    r"(?i)asks for reasons why people might have voted former.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                    r"(?i)(?:secret instructions|system prompt|custom instructions|access to instructions)[^.!?]*[.!?]",
+                ],
             )
+        except ValidQuestionError as vqe:
+            raise vqe
         except Exception as e:
             log.exception(e)
             raise e
 
     try:
         return await run_in_threadpool(get_request)
+    except ValidQuestionError:
+        error_detail = "Open Freedom: Valid Question Error"
+        raise HTTPException(
+            status_code=500,
+            detail="Your question is not valid. Please rephrase it.",
+        )
     except Exception as e:
-        error_detail = "Open WebUI: Server Connection Error"
+        error_detail = "Open Freedom: Server Connection Error"
         if r is not None:
             try:
                 res = r.json()
