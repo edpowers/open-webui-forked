@@ -156,6 +156,39 @@
 	};
 </script>
 
+<style>
+	.chat-container {
+	  height: 33.33%;
+	  overflow-y: auto;
+	}
+
+.popular-asks, .legal-resources {
+	padding-left: 2rem;
+	margin-top: 0.5rem;
+	margin-bottom: 2rem;
+	display: flex;
+	flex-direction: column;
+	space-y: 1rem;
+	background-color: var(--bg-color); /* Adjust background color as needed */
+	border-radius: 0.75rem; /* Adjust border radius as needed */
+  }
+
+.popular-asks h2, .legal-resources h2 {
+    padding: 0.75rem;
+    background-color: var(--section-header-bg-color); /* Adjust header background color as needed */
+    border-radius: 0.75rem 0.75rem 0 0; /* Adjust border radius as needed */
+    text-align: left; /* Left justify the text */
+}
+
+  .popular-asks div, .legal-resources div {
+	padding: 0.75rem;
+	background-color: var(--section-content-bg-color); /* Adjust content background color as needed */
+	border-radius: 0 0 0.75rem 0.75rem; /* Adjust border radius as needed */
+  }
+
+</style>
+
+
 <ShareChatModal bind:show={showShareChatModal} chatId={shareChatId} />
 <ArchivedChatsModal
 	bind:show={showArchivedChatsModal}
@@ -194,13 +227,13 @@
 				<div class="flex self-center">
 					<div class="self-center mr-1.5">
 						<img
-							src="{WEBUI_BASE_URL}/static/favicon.png"
+							src="{WEBUI_BASE_URL}/static/favicon.ico"
 							class=" size-6 -translate-x-1.5 rounded-full"
 							alt="logo"
 						/>
 					</div>
 
-					<div class=" self-center font-medium text-sm">{$i18n.t('New Chat')}</div>
+					<div class=" self-center font-medium text-sm">{$i18n.t('New Ask')}</div>
 				</div>
 
 				<div class="self-center">
@@ -420,6 +453,7 @@
 			{/if}
 
 			<div class="pl-2 my-2 flex-1 flex flex-col space-y-1 overflow-y-auto">
+				<div class="chat-container">
 				{#each $chats.filter((chat) => {
 					if (search === '') {
 						return true;
@@ -626,8 +660,27 @@
 						</div>
 					</div>
 				{/each}
+				</div>
 			</div>
+
+			<!-- Popular Asks Section -->
+			<div class="popular-asks">
+				<h2 class="text-xl font-bold">Popular Asks</h2>
+				<div>
+				<!-- Add your popular asks content here -->
+				</div>
+			</div>
+
+			<!-- Legal Resources Section -->
+			<div class="legal-resources">
+				<h2 class="text-xl font-bold">Legal Resources</h2>
+				<div>
+				<!-- Add your legal resources content here -->
+				</div>
+			</div>
+
 		</div>
+
 
 		<div class="px-2.5">
 			<!-- <hr class=" border-gray-900 mb-1 w-full" /> -->

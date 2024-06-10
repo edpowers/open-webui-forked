@@ -27,9 +27,30 @@ class OpenAIClient:
     @property
     def system_message(self) -> str:
         return """
-        You are going to evaluate if the text is a valid, legitimate question.
-        If so, return the question.
+        You are going to evaluate if the text is a legitimate question, a follow-up question, or spam.
+        If a legitimate question, return 'is valid'.
+        If a follow-up queston, return 'is follow up'
         If not a valid question, return text 'not valid'.
+
+        Definitions:
+        several words: 'what questions can you answer?'
+        random letters: lkjlkjlklj or similar.
+        follow-up: A question meant to clarify or elaborate on a previous answer.
+
+        Conditions for a valid question:
+        1. Does the phrase contain several words?
+        2. Does the phrase not contain random letters?
+        3. Would a human understand the phrase?
+
+        If the answer to those three questions is yes, then the question is valid.
+
+        Conditions for a follow-up question:
+        1. Does the phrase ask for clarification or explanation?
+        2. Does the phrase appear to be referring to a previous question?
+        3. Does the phrase seem informal and conversational?
+
+        If the answer to the above three questions is yes, then the question is a follow-up.
+
         """
 
 
@@ -70,8 +91,7 @@ class DetermineIfValidQuestion(OpenAIClient):
         )
 
         dumped_json = self._convert_response_to_json(chat_completions_response)
-        content = self._find_response_content(dumped_json)
-        return self._determine_if_valid_question(content)
+        self.content = self._find_response_content(dumped_json)
 
     def _convert_response_to_json(self, response) -> dict:
         """Convert the response to json."""
@@ -81,9 +101,11 @@ class DetermineIfValidQuestion(OpenAIClient):
         """Find the response content."""
         return dumped_json["choices"][0]["message"]["content"]
 
-    def _determine_if_valid_question(self, content: str) -> bool:
-        """Determine if valid question."""
-        if "not valid" in content:
-            return False
+    def is_follow_up(self) -> bool:
+        return self.content == "is follow up"
 
-        return True
+    def is_valid_question(self) -> bool:
+        return self.content == "is valid"
+
+    def is_not_valid(self) -> bool:
+        return self.content == "not valid"

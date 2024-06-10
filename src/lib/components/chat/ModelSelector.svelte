@@ -37,75 +37,86 @@
 </script>
 
 <div class="flex flex-col mt-0.5 w-full">
-	{#each selectedModels as selectedModel, selectedModelIdx}
-		<div class="flex w-full">
-			<div class="overflow-hidden w-full">
-				<div class="mr-0.5 max-w-full">
-					<Selector
-						placeholder={$i18n.t('Select a model')}
-						items={$models
-							.filter((model) => model.name !== 'hr')
-							.map((model) => ({
-								value: model.id,
-								label: model.name,
-								info: model
-							}))}
-						bind:value={selectedModel}
-					/>
-				</div>
-			</div>
 
-			{#if selectedModelIdx === 0}
-				<div class="  self-center mr-2 disabled:text-gray-600 disabled:hover:text-gray-600">
-					<Tooltip content="Add Model">
-						<button
-							class=" "
-							{disabled}
-							on:click={() => {
-								selectedModels = [...selectedModels, ''];
-							}}
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								fill="none"
-								viewBox="0 0 24 24"
-								stroke-width="1.5"
-								stroke="currentColor"
-								class="w-4 h-4"
-							>
-								<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
-							</svg>
-						</button>
-					</Tooltip>
-				</div>
-			{:else}
-				<div class="  self-center disabled:text-gray-600 disabled:hover:text-gray-600 mr-2">
-					<Tooltip content="Remove Model">
-						<button
-							{disabled}
-							on:click={() => {
-								selectedModels.splice(selectedModelIdx, 1);
-								selectedModels = selectedModels;
-							}}
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								fill="none"
-								viewBox="0 0 24 24"
-								stroke-width="1.5"
-								stroke="currentColor"
-								class="w-4 h-4"
-							>
-								<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12h-15" />
-							</svg>
-						</button>
-					</Tooltip>
-				</div>
-			{/if}
+	<div class="flex w-full">
+		<div class="overflow-hidden w-full">
+			<p>Ask Rex if your constitutional rights have been infringed. </p>
 		</div>
-	{/each}
+	</div>
+
+	{#if $user.role === 'admin'}
+		{#each selectedModels as selectedModel, selectedModelIdx}
+			<div class="flex w-full">
+				<div class="overflow-hidden w-full">
+					<div class="mr-0.5 max-w-full">
+						<Selector
+							placeholder={$i18n.t('Select a model')}
+							items={$models
+								.filter((model) => model.name !== 'hr')
+								.map((model) => ({
+									value: model.id,
+									label: model.name,
+									info: model
+								}))}
+							bind:value={selectedModel}
+						/>
+					</div>
+				</div>
+
+				{#if selectedModelIdx === 0}
+					<div class="  self-center mr-2 disabled:text-gray-600 disabled:hover:text-gray-600">
+						<Tooltip content="Add Model">
+							<button
+								class=" "
+								{disabled}
+								on:click={() => {
+									selectedModels = [...selectedModels, ''];
+								}}
+							>
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke-width="1.5"
+									stroke="currentColor"
+									class="w-4 h-4"
+								>
+									<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
+								</svg>
+							</button>
+						</Tooltip>
+					</div>
+				{:else}
+					<div class="  self-center disabled:text-gray-600 disabled:hover:text-gray-600 mr-2">
+						<Tooltip content="Remove Model">
+							<button
+								{disabled}
+								on:click={() => {
+									selectedModels.splice(selectedModelIdx, 1);
+									selectedModels = selectedModels;
+								}}
+							>
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke-width="1.5"
+									stroke="currentColor"
+									class="w-4 h-4"
+								>
+									<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12h-15" />
+								</svg>
+							</button>
+						</Tooltip>
+					</div>
+				{/if}
+			</div>
+		{/each}
+	{/if}
 </div>
 
 <div class="text-left mt-0.5 ml-1 text-[0.7rem] text-gray-500">
-	<button on:click={saveDefaultModel}> {$i18n.t('Set as default')}</button>
+	{#if $user.role === 'admin'}
+		<button on:click={saveDefaultModel}> {$i18n.t('Set as default')}</button>
+	{/if}
 </div>

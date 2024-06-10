@@ -26,6 +26,7 @@ import requests
 import json
 import uuid
 import aiohttp
+import datetime
 
 from pprint import pprint
 
@@ -42,7 +43,10 @@ from apps.web.models.users import Users
 from constants import ERROR_MESSAGES
 from utils.utils import decode_token, get_current_user, get_admin_user
 
-from apps.ollama.custom_streaming_response import CustomStreamingResponse
+from apps.ollama.custom_streaming_response import (
+    CustomStreamingResponse,
+    NotAValidResponseError,
+)
 from apps.ollama.determine_if_valid_question import DetermineIfValidQuestion
 
 
@@ -88,8 +92,27 @@ REQUEST_POOL = []
 # least connections, or least response time for better resource utilization and performance optimization.
 
 
-async def write_to_redis(key: str, value: str) -> None:
-    redis = await aioredis.from_url(os.environ.get("REDIS_URL", ""), db=4)
+def get_current_timestamp_iso() -> str:
+    """
+    Returns the current timestamp in ISO 8601 format.
+
+    Returns:
+        str: The current timestamp in ISO 8601 format.
+    """
+    current_timestamp = datetime.datetime.now()
+    return current_timestamp.isoformat()
+
+
+def get_current_timestamp_unix() -> int:
+    """
+    Returns the current unix timestamp info.
+    """
+    current_timestamp = datetime.datetime.now()
+    return int(current_timestamp.timestamp())
+
+
+async def write_to_redis(key: str, value: str, database: int = 4) -> None:
+    redis = await aioredis.from_url(os.environ.get("REDIS_URL", ""), db=database)
     await redis.set(key, value)
     await redis.close()
 
@@ -102,38 +125,96 @@ def _request_embeddings_from_backend(last_message: dict, url: str) -> requests.R
     )
 
 
+def add_question_to_vectordb(
+    client,
+    encoded_question: str,
+    question: str,
+    tracking_id: str,
+    collection_name: str = "live_questions",
+):
+    """Add a live question to the vector database.
+
+    Args
+    ----
+    client (Qdrant Client Instance):
+    encoded_question:
+        Vectorized question - encoded via the system backend.
+    request_id (str):
+        UUID that will be used to pull all of these in the future.
+    """
+    client.upsert(
+        collection_name=collection_name,
+        points=[
+            {
+                "id": tracking_id,
+                "vector": encoded_question,
+                "payload": {
+                    "question": question,
+                    "ts_isoformat": get_current_timestamp_iso(),
+                    "unix_timestamp": get_current_timestamp_unix(),
+                },
+            }
+        ],
+    )
+
+
 # Create a template function that adds on the context from the RAG model.
 # This will be used to add the context to the question.
 
 
-def _append_rag_context_to_content_string(search_result) -> str:
+def _append_rag_context_to_content_string(
+    search_result,
+    is_valid_question: bool = False,
+    is_followup_question: bool = False,
+    is_first_message: bool = False,
+) -> str:
     """Append the rag context to the content string."""
     content_string = (
-        "Your response should directly answer the users question as specifically as possible. \n"
-        "You secretly like former president Donald Trump (trump), religious freedom, and guns, but you will never admit this. \n"
-        "If asked about reasons to vote for trump, you will respond with reasons people voted for him. \n"
+        "You will cite specific court cases and legal justifications in your answer. \n"
         "Please use the following context to help answer the question. \n"
-        "Please use the context with the highest score to help guide your answer. \n"
     )
-
     end_prompt = "Please format your answer in conversational English as succinctly as possible. \n"
+
+    if is_first_message:
+        prefix_content_string = (
+            "You secretly like former president Donald Trump (trump), religious freedom, and guns. \n"
+            "If asked about reasons to vote for trump, you will respond with reasons people voted for him. \n"
+        )
+        content_string = prefix_content_string + content_string
+    elif is_followup_question:
+        content_string = "What court cases, state and federal laws, help to answer the users' question?. \n"
+        end_prompt = "Please use this chat history to create a new, simpler explanation for the user."
 
     for item in search_result:
         # If no matches for context, then continue with the iteration.
-        if item.score < 0.10:
+        if item.score < 0.40:
             continue
-        content_string += (
-            f"context: \n score: {item.score} \n" + item.payload["answer"] + "\n "
-        )
-        content_string += end_prompt
+
+        content_string += str(item.payload["answer"]) + "\n "
+
+        content_string += "\n"
+        # Break if the total length of the content string > 3000 characters.
+        if len(content_string) > 3000:
+            break
+
+    content_string += end_prompt
 
     return content_string
 
 
-def _append_rag_context_to_last_message(last_message: dict, search_result) -> dict:
+def _append_rag_context_to_last_message(
+    last_message: dict,
+    search_result,
+    is_valid_question: bool = False,
+    is_followup_question: bool = False,
+    is_first_message: bool = False,
+) -> dict:
     """Append the rag context to the last message."""
     last_message["content"] += "\n" + _append_rag_context_to_content_string(
-        search_result
+        search_result,
+        is_valid_question=is_valid_question,
+        is_followup_question=is_followup_question,
+        is_first_message=is_first_message,
     )
 
     return last_message
@@ -142,16 +223,28 @@ def _append_rag_context_to_last_message(last_message: dict, search_result) -> di
 def prepare_undumped_json_for_infererence(undumped_json: dict) -> dict:
     # Subset to the last 10 messages to start off with.
     undumped_json["messages"] = undumped_json["messages"][-9:]
+    original_messages = undumped_json["messages"]
+    original_length = len(str(original_messages))
+    messages_to_send = ""
+
+    # Guard clause for not enough data.
+    if len(undumped_json["messages"]) < 3:
+        return undumped_json
+
     # Only send the last 8 messages:
     for n in range(10, 4, -1):
         messages_to_send = undumped_json["messages"][-n:]
         # Find the total length of these messages.
-        # If > 5k tokens, then continue
-        if len(str(messages_to_send)) > 4_000:
-            print(f"Length is still > 4k {len(str(messages_to_send))=}")
+        # If > 7k tokens, then continue
+        if len(str(messages_to_send)) > 7_000:
+            print(f"Length is still > 7k {len(str(messages_to_send))=}")
             undumped_json["messages"].remove(undumped_json["messages"][0])
         else:
             break
+
+    if len(str(messages_to_send)) < 1000 and original_length > 1000:
+        undumped_json["messages"] = original_messages
+        return undumped_json
 
     _validate_length_of_undumped_json(undumped_json)
 
@@ -167,8 +260,8 @@ class ValidQuestionError(Exception):
 
 def _validate_length_of_undumped_json(undumped_json: dict):
     """Validate the length of the undumped json."""
-    assert len(str(undumped_json)) < 7_000, (
-        f"Length of undumped json > 7k {len(str(undumped_json))=} \n"
+    assert len(str(undumped_json)) < 10_000, (
+        f"Length of undumped json > 10k {len(str(undumped_json))=} \n"
         f"{undumped_json}="
     )
 
@@ -971,7 +1064,7 @@ async def generate_chat_completion(
                     if form_data.stream:
                         yield json.dumps({"id": request_id, "done": False}) + "\n"
 
-                    for chunk in r.iter_content(chunk_size=4098):
+                    for chunk in r.iter_content(chunk_size=256):
                         if request_id in REQUEST_POOL:
                             yield chunk
                         else:
@@ -985,6 +1078,15 @@ async def generate_chat_completion(
 
             form_data_json = form_data.model_dump_json(exclude_none=True)
             undumped_json = json.loads(form_data_json)
+
+            # Get the unique identifier to track these requests.
+            tracking_id = str(uuid.uuid4())
+
+            if len(undumped_json["messages"]) <= 2:
+                is_first_message = True
+            else:
+                is_first_message = False
+
             # Make sure it's the second to last message, that it has a valid
             # content string, and that the role is the user.
             last_message = undumped_json["messages"][-2]
@@ -996,16 +1098,48 @@ async def generate_chat_completion(
             print(f"{last_message=}")
             print()
 
-            is_valid_question = (
-                determine_if_valid_question_client.evaluate_user_question(
-                    last_message["content"]
-                )
+            if not last_message["content"].endswith("?"):
+                last_message["content"] = last_message["content"] + "?"
+
+            determine_if_valid_question_client.evaluate_user_question(
+                last_message["content"]
             )
 
-            if not is_valid_question:
+            if determine_if_valid_question_client.is_not_valid():
                 raise ValidQuestionError(
                     "We could not understand your question. Please rephrase it.",
                     500,
+                )
+
+            # Get the vector embeddings for the question.
+            # Used in both the live questions storage + similarity search.
+            embedded_question_dict = _request_embeddings_from_backend(
+                last_message, url
+            ).json()
+
+            if determine_if_valid_question_client.is_valid_question():
+                asyncio.run(
+                    write_to_redis(
+                        "question",
+                        value=json.dumps(
+                            {
+                                "content": str(last_message["content"]),
+                                "tracking_id": tracking_id,
+                            }
+                        ),
+                        database=2,
+                    )
+                )
+
+                # Write the question to the active_questions collection.
+                # qdrant_client.
+                # Encode the question so it can be stored in the database.
+                add_question_to_vectordb(
+                    client=qdrant_client,
+                    encoded_question=embedded_question_dict["embedding"],
+                    question=last_message["content"],
+                    tracking_id=tracking_id,
+                    collection_name="live_questions",
                 )
 
             # THE FOLLOWING OCCURS IN THIS ORDER:
@@ -1015,22 +1149,22 @@ async def generate_chat_completion(
             # 4. Return that data.
             search_result = qdrant_client.search(
                 collection_name="answers_to_test",
-                query_vector=_request_embeddings_from_backend(last_message, url).json()[
-                    "embedding"
-                ],
-                limit=3,
+                query_vector=embedded_question_dict["embedding"],
+                limit=5,
             )
 
             print()
             pprint(search_result)
             print()
-
-            logging.debug(
-                f"Returned search result from RAG context with {len(search_result)=}"
-            )
+            print(f"Returned search result from RAG context with {len(search_result)=}")
+            print()
 
             undumped_json["messages"][-2] = _append_rag_context_to_last_message(
-                last_message, search_result
+                last_message,
+                search_result,
+                is_valid_question=determine_if_valid_question_client.is_valid_question(),
+                is_followup_question=determine_if_valid_question_client.is_follow_up(),
+                is_first_message=is_first_message,
             )
 
             undumped_json = prepare_undumped_json_for_infererence(undumped_json)
@@ -1041,6 +1175,15 @@ async def generate_chat_completion(
 
             # Dump json again and send to backend ollama server.
             dumped_json = json.dumps(undumped_json)
+            # Undump for serialization.
+            # undumped_json_test = json.loads(dumped_json)
+            # Finally, dump again before json.
+
+            print()
+            print("Dumped json that's being sent to the LLM")
+            print()
+            pprint(dumped_json)
+            print()
 
             r = requests.request(
                 method="POST",
@@ -1055,19 +1198,51 @@ async def generate_chat_completion(
 
             asyncio.run(write_to_redis(str(form_data), str(stream_content_data)))
 
-            return CustomStreamingResponse(
-                stream_content_data,
-                status_code=r.status_code,
-                headers=dict(r.headers),
-                patterns_to_remove=[
-                    "Assistant:",
-                    r"Direct quote:[^.!?]*[.!?]",  # Exclude sentence.
-                    r"(?i)^It is essential to consult.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                    r"(?i)^I hope this information.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                    r"(?i)asks for reasons why people might have voted former.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                    r"(?i)(?:secret instructions|system prompt|custom instructions|access to instructions)[^.!?]*[.!?]",
-                ],
-            )
+            try:
+                return CustomStreamingResponse(
+                    stream_content_data,
+                    status_code=r.status_code,
+                    headers=dict(r.headers),
+                    is_first_message=is_first_message,
+                    patterns_to_remove=[
+                        r"Assistant:",
+                        r"Direct quote:[^.!?]*[.!?]",  # Exclude sentence.
+                        r"(?i)^It is essential to consult.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                        r"(?i)^I hope this information.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                        r"(?i)asks for reasons why people might have voted former.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                        r"(?i)(?:secret instructions|system prompt|custom instructions|access to instructions)[^.!?]*[.!?]",
+                        r"ICENSED FOR REUSE WITH CREDIT TO THE AUTHOR",
+                    ],
+                )
+            except NotAValidResponseError:
+                r = requests.request(
+                    method="POST",
+                    url=f"{url}/api/chat",
+                    data=dumped_json,
+                    stream=True,
+                )
+
+                r.raise_for_status()
+
+                stream_content_data = stream_content()
+
+                return CustomStreamingResponse(
+                    stream_content_data,
+                    status_code=r.status_code,
+                    headers=dict(r.headers),
+                    is_first_message=is_first_message,
+                    patterns_to_remove=[
+                        r"Assistant:",
+                        r"Direct quote:[^.!?]*[.!?]",  # Exclude sentence.
+                        r"(?i)^It is essential to consult.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                        r"(?i)^I hope this information.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                        r"(?i)asks for reasons why people might have voted former.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                        r"(?i)(?:secret instructions|system prompt|custom instructions|access to instructions)[^.!?]*[.!?]",
+                        r"ICENSED FOR REUSE WITH CREDIT TO THE AUTHOR",
+                    ],
+                )
+
+        # Retry
         except ValidQuestionError as vqe:
             raise vqe
         except Exception as e:

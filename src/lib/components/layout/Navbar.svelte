@@ -28,7 +28,7 @@
 <ShareChatModal bind:show={showShareChatModal} chatId={$chatId} />
 <nav id="nav" class=" sticky py-2.5 top-0 flex flex-row justify-center z-30">
 	<div
-		class=" flex {$settings?.fullScreenMode ?? null ? 'max-w-full' : 'max-w-3xl'} 
+		class=" flex {$settings?.fullScreenMode ?? null ? 'max-w-full' : 'max-w-3xl'}
 		 w-full mx-auto px-3"
 	>
 		<div class="flex items-center w-full max-w-full">
@@ -104,7 +104,7 @@
 						</button>
 					</Menu>
 				{/if}
-				<Tooltip content="New Chat">
+				<Tooltip content="New Ask">
 					<button
 						id="new-chat-button"
 						class=" cursor-pointer p-1.5 flex dark:hover:bg-gray-700 rounded-full transition"

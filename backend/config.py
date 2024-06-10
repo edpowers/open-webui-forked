@@ -72,9 +72,11 @@ except ImportError:
 
 WEBUI_NAME = os.environ.get("WEBUI_NAME", "Open WebUI")
 if WEBUI_NAME != "Open WebUI":
-    WEBUI_NAME += " (Open WebUI)"
+    WEBUI_NAME += ""
 
-WEBUI_FAVICON_URL = "https://openwebui.com/favicon.png"
+# WEBUI_FAVICON_URL = "https://openwebui.com/favicon.ico"
+WEBUI_FAVICON_URL = "https://showourfreedom.com/static/favicon.ico"
+# /root/llm_rf_frontend/open-webui-forked/static/
 
 ####################################
 # ENV (dev,test,prod)
@@ -168,7 +170,7 @@ except:
 
 STATIC_DIR = str(Path(os.getenv("STATIC_DIR", "./static")).resolve())
 
-shutil.copyfile(f"{FRONTEND_BUILD_DIR}/favicon.png", f"{STATIC_DIR}/favicon.png")
+shutil.copyfile(f"{FRONTEND_BUILD_DIR}/favicon.ico", f"{STATIC_DIR}/favicon.ico")
 
 ####################################
 # CUSTOM_NAME
@@ -190,7 +192,7 @@ if CUSTOM_NAME:
 
                 r = requests.get(url, stream=True)
                 if r.status_code == 200:
-                    with open(f"{STATIC_DIR}/favicon.png", "wb") as f:
+                    with open(f"{STATIC_DIR}/favicon.ico", "wb") as f:
                         r.raw.decode_content = True
                         shutil.copyfileobj(r.raw, f)
 
