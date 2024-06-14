@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import typing
 from functools import partial
+import json
 
 from dataclasses import dataclass
 
@@ -16,6 +17,12 @@ from starlette.concurrency import iterate_in_threadpool
 # from starlette.datastructures import URL, MutableHeaders
 from starlette.types import Receive, Scope, Send
 from starlette.responses import Response
+
+
+from apps.ollama.utils import (
+    decode_or_replace_invalid_chars,
+    encode_or_replace_invalid_chars,
+)
 
 
 Content = typing.Union[str, bytes, memoryview]
@@ -66,50 +73,6 @@ class CustomStreamingResponse(Response):
             if message["type"] == "http.disconnect":
                 break
 
-    async def _stream_response(self, send: Send) -> None:
-        await send(
-            {
-                "type": "http.response.start",
-                "status": self.status_code,
-                "headers": self.raw_headers,
-            }
-        )
-        async for chunk in self.body_iterator:
-            # print(f"Starting streaming with {chunk=}")
-
-            # chunk=b'age":{"role":"assistant","content":" law"},"done":false}
-            # \n{"model":"freedom:latest","created_at":"2024-06-04T18:23:57.238914535Z",
-            # "message":{"role":"assistant","content":"."},"done":false}
-            # \n{"model":"freedom:latest","created_at":"2024-06-04T18:23:57.275040856Z",
-            # "message":{"role":"assistant","content":" However"},"done":false}
-            # \n{"model":"freedom:latest","created_at":"2024-06-04T18:23:57.311100408Z",
-            # "message":{"role":"assistant","content":","},"done":false}
-
-            if not isinstance(chunk, (bytes, memoryview)):
-                chunk = chunk.encode(self.charset)
-
-            # Remove specified patterns from the chunk
-            for pattern in self.patterns_to_remove:
-                chunk_test = re.sub(pattern.encode(self.charset), b"", chunk)
-                # Guard to stop from delivering empty text.
-                if len(chunk_test) > 10:
-                    chunk = chunk_test
-                else:  # If all parts of the chunk have already been removed.
-                    break
-
-            # print(f"Ending chunk {chunk=}")
-
-            # If the chunk is empty, don't return. Wait until valid response.
-            if not chunk or len(chunk) < 2:
-                continue
-
-            if len(str(chunk)) > 2:
-                await send(
-                    {"type": "http.response.body", "body": chunk, "more_body": True}
-                )
-
-        await send({"type": "http.response.body", "body": b"", "more_body": False})
-
     async def stream_response(self, send: Send) -> None:
         await send(
             {
@@ -141,21 +104,50 @@ class CustomStreamingResponse(Response):
                 continue
 
             if len(buffer) > 256:
-                full_response = buffer.decode(self.charset)
-                # Check for error patterns in the full response
-                # Check for error patterns in the full response
-                if (
-                    re.search(self.error_patterns, full_response)
-                    or full_response == "Assistant:"
-                    or "/******" in full_response
-                    or "INST" in full_response
-                ):
-                    print("Raising not a valid response error")
-                    raise NotAValidResponseError(full_response)
+                full_response = decode_or_replace_invalid_chars(buffer, self.charset)
 
                 # Remove specified patterns from the full response
                 for pattern in self.patterns_to_remove:
                     full_response = re.sub(pattern, "", full_response)
+
+                raise_error = False
+                # Check for error patterns in the full response
+                try:
+                    if re.search(self.error_patterns, full_response):
+                        print("Raising not a valid response error")
+                        raise_error = True
+                    elif full_response == "Assistant:":
+                        print("Full response == Assistant:")
+                        raise_error = True
+                    elif "/******" in full_response:
+                        print("Response contains special characters /******")
+                        raise_error = True
+                finally:
+                    if raise_error:
+                        await send(
+                            {
+                                "type": "http.response.body",
+                                "body": json.dumps(
+                                    {
+                                        "error": True,
+                                        "content": "The response is not valid. Please click the regenerate button to try again.",
+                                    }
+                                ).encode(self.charset),
+                                "more_body": False,
+                            }
+                        )
+                        return
+                        # Send a message to the frontend indicating that the response is not valid
+                        await send(
+                            {
+                                "type": "http.response.body",
+                                "body": json.dumps(
+                                    {"error": "Not a valid response. Retrying..."}
+                                ).encode(self.charset),
+                                "more_body": True,
+                            }
+                        )
+                        raise NotAValidResponseError(full_response)
 
                 # Encode the sanitized response back to bytes
                 sanitized_response = full_response.encode(self.charset)
@@ -175,24 +167,16 @@ class CustomStreamingResponse(Response):
         print(f"Length of buffer is {len(buffer)=} and {self.is_first_message=}")
 
         # Decode the full buffer to a string for processing
-        full_response = buffer.decode(self.charset)
-
-        # Check for error patterns in the full response
-        if (
-            re.search(self.error_patterns, full_response)
-            or full_response == "Assistant:"
-            or "/******" in full_response
-            or "INST" in full_response
-        ):
-            print("Raising not a valid response error")
-            raise NotAValidResponseError(full_response)
+        full_response = decode_or_replace_invalid_chars(buffer, self.charset)
 
         # Remove specified patterns from the full response
         for pattern in self.patterns_to_remove:
             full_response = re.sub(pattern, "", full_response)
 
         # Encode the sanitized response back to bytes
-        sanitized_response = full_response.encode(self.charset)
+        sanitized_response = encode_or_replace_invalid_chars(
+            full_response, self.charset
+        )
 
         print("Reached end of streaming body.")
 

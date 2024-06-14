@@ -12,6 +12,7 @@ export const MODEL_DOWNLOAD_POOL = writable({});
 export const theme = writable('system');
 export const chatId = writable('');
 
+export const top_questions = writable({});
 export const chats = writable([]);
 export const tags = writable([]);
 export const models: Writable<Model[]> = writable([]);

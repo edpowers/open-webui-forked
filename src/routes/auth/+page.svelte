@@ -1,6 +1,6 @@
 <script>
 	import { goto } from '$app/navigation';
-	import { userSignIn, userSignUp } from '$lib/apis/auths';
+	import { userSignIn, userSignUp, guestRegister } from '$lib/apis/auths';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import { WEBUI_NAME, config, user } from '$lib/stores';
@@ -47,11 +47,34 @@
 		await setSessionUser(sessionUser);
 	};
 
-	const submitHandler = async () => {
+	const guestRegisterHandler = async () => {
+		try {
+			const sessionUser = await guestRegister();
+			await setSessionUser(sessionUser);
+
+			// Additional logic or redirection after successful guest registration
+			// For example, you can navigate to a specific page or display a success message
+
+		} catch (error) {
+			toast.error(error);
+		}
+	};
+
+	const _submitHandler = async () => {
 		if (mode === 'signin') {
 			await signInHandler();
 		} else {
 			await signUpHandler();
+		}
+	};
+
+	const submitHandler = async () => {
+		if (mode === 'signin') {
+			await signInHandler();
+		} else if (mode === 'signup') {
+			await signUpHandler();
+		} else if (mode === 'guest_register') {
+			await guestRegisterHandler();
 		}
 	};
 
@@ -64,7 +87,18 @@
 			await signInHandler();
 		}
 	});
+
+	function toggleMode() {
+        if (mode === 'signin') {
+            mode = 'signup';
+        } else if (mode === 'signup') {
+            mode = 'signin';
+        } else {
+            mode = 'signup';
+        }
+    }
 </script>
+
 
 <svelte:head>
 	<title>
@@ -122,7 +156,8 @@
 						}}
 					>
 						<div class=" text-xl sm:text-2xl font-bold">
-							{mode === 'signin' ? $i18n.t('Sign in') : $i18n.t('Sign up')}
+							{mode === 'signin' ? $i18n.t('Sign in') : mode === 'signup' ? $i18n.t('Sign up') : $i18n.t('Use as Guest') }
+							<!-- {mode === 'signin' ? $i18n.t('Sign in') : $i18n.t('Sign up')}  -->
 							{$i18n.t('to')}
 							{$WEBUI_NAME}
 						</div>
@@ -152,30 +187,32 @@
 
 								<hr class=" my-3" />
 							{/if}
+							{#if mode !== 'guest_register'}
 
-							<div class="mb-2">
-								<div class=" text-sm font-semibold text-left mb-1">{$i18n.t('Email')}</div>
-								<input
-									bind:value={email}
-									type="email"
-									class=" border px-4 py-2.5 rounded-2xl w-full text-sm"
-									autocomplete="email"
-									placeholder={$i18n.t('Enter Your Email')}
-									required
-								/>
-							</div>
+								<div class="mb-2">
+									<div class=" text-sm font-semibold text-left mb-1">{$i18n.t('Email')}</div>
+									<input
+										bind:value={email}
+										type="email"
+										class=" border px-4 py-2.5 rounded-2xl w-full text-sm"
+										autocomplete="email"
+										placeholder={$i18n.t('Enter Your Email')}
+										required
+									/>
+								</div>
 
-							<div>
-								<div class=" text-sm font-semibold text-left mb-1">{$i18n.t('Password')}</div>
-								<input
-									bind:value={password}
-									type="password"
-									class=" border px-4 py-2.5 rounded-2xl w-full text-sm"
-									placeholder={$i18n.t('Enter Your Password')}
-									autocomplete="current-password"
-									required
-								/>
-							</div>
+								<div>
+									<div class=" text-sm font-semibold text-left mb-1">{$i18n.t('Password')}</div>
+									<input
+										bind:value={password}
+										type="password"
+										class=" border px-4 py-2.5 rounded-2xl w-full text-sm"
+										placeholder={$i18n.t('Enter Your Password')}
+										autocomplete="current-password"
+										required
+									/>
+								</div>
+							{/if}
 						</div>
 
 						<div class="mt-5">
@@ -183,7 +220,8 @@
 								class=" bg-gray-900 hover:bg-gray-800 w-full rounded-full text-white font-semibold text-sm py-3 transition"
 								type="submit"
 							>
-								{mode === 'signin' ? $i18n.t('Sign in') : $i18n.t('Create Account')}
+								<!-- {mode === 'signin' ? $i18n.t('Sign in') : $i18n.t('Create Account')} -->
+								{mode === 'signin' ? $i18n.t('Sign in') : mode === 'signup' ? $i18n.t('Create Account') : $i18n.t('Continue as Guest')}
 							</button>
 
 							<div class=" mt-4 text-sm text-center">
@@ -194,16 +232,18 @@
 								<button
 									class=" font-medium underline"
 									type="button"
-									on:click={() => {
-										if (mode === 'signin') {
-											mode = 'signup';
-										} else {
-											mode = 'signin';
-										}
-									}}
-								>
+									on:click={() => { toggleMode(); }}>
 									{mode === 'signin' ? $i18n.t('Sign up') : $i18n.t('Sign in')}
 								</button>
+							</div>
+							<div class="mt-4 text-sm text-center">
+								{#if mode !== 'guest_register'}
+									<button class="font-medium underline"
+											type="button"
+											on:click={() => { mode = 'guest_register'; }}>
+										{ $i18n.t('Use as Guest') }
+									</button>
+								{/if}
 							</div>
 						</div>
 					</form>

@@ -1,5 +1,38 @@
 /// <reference types="cypress" />
 
+import { faker } from '@faker-js/faker';
+
+const generateRandomEmail = (): string => {
+  return faker.internet.email();
+};
+
+const generateRandomPassword = (): string => {
+  return faker.internet.password(10);
+};
+
+
+const guestRegister = () => {
+	const name = faker.name.fullName();
+	const email = generateRandomEmail();
+	const password = generateRandomPassword();
+
+	return cy
+	  .request({
+		method: 'POST',
+		url: '/api/v1/auths/signup',
+		body: {
+		  name: name,
+		  email: email,
+		  password: password
+		},
+		failOnStatusCode: false
+	  })
+	  .then((response) => {
+		expect(response.status).to.be.oneOf([200, 400]);
+	  });
+  };
+
+
 export const adminUser = {
 	name: 'Admin User',
 	email: 'admin@example.com',
@@ -67,6 +100,7 @@ Cypress.Commands.add('login', (email, password) => login(email, password));
 Cypress.Commands.add('register', (name, email, password) => register(name, email, password));
 Cypress.Commands.add('registerAdmin', () => registerAdmin());
 Cypress.Commands.add('loginAdmin', () => loginAdmin());
+Cypress.Commands.add('guestRegister', () => guestRegister());
 
 before(() => {
 	cy.registerAdmin();

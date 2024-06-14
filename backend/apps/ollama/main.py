@@ -27,6 +27,8 @@ import json
 import uuid
 import aiohttp
 import datetime
+import httpx
+import time
 
 from pprint import pprint
 
@@ -58,6 +60,20 @@ from config import (
     UPLOAD_DIR,
 )
 from utils.misc import calculate_sha256
+
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn="https://507987e3e7316e1bfee423a1c8efc293@o378729.ingest.us.sentry.io/4507413365456896",
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for performance monitoring.
+    traces_sample_rate=1.0,
+    # Set profiles_sample_rate to 1.0 to profile 100%
+    # of sampled transactions.
+    # We recommend adjusting this value in production.
+    profiles_sample_rate=1.0,
+)
+
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["OLLAMA"])
@@ -92,6 +108,14 @@ REQUEST_POOL = []
 # least connections, or least response time for better resource utilization and performance optimization.
 
 
+def _is_first_message(undumped_json: dict) -> bool:
+    """If the message is the first message or not."""
+    if len(undumped_json["messages"]) <= 2:
+        return True
+    else:
+        return False
+
+
 def get_current_timestamp_iso() -> str:
     """
     Returns the current timestamp in ISO 8601 format.
@@ -120,7 +144,7 @@ async def write_to_redis(key: str, value: str, database: int = 4) -> None:
 def _request_embeddings_from_backend(last_message: dict, url: str) -> requests.Response:
     return requests.request(
         method="POST",
-        url=f"{url}/embeddings",
+        url=f"{url}/backend/embeddings",
         json={"text_to_encode": json.dumps(last_message["content"])},
     )
 
@@ -171,6 +195,8 @@ def _append_rag_context_to_content_string(
     """Append the rag context to the content string."""
     content_string = (
         "You will cite specific court cases and legal justifications in your answer. \n"
+        "What American court cases, state and federal laws, help to answer the users' question? \n"
+        "Are the users' constitutional rights being infringed? \n"
         "Please use the following context to help answer the question. \n"
     )
     end_prompt = "Please format your answer in conversational English as succinctly as possible. \n"
@@ -182,7 +208,11 @@ def _append_rag_context_to_content_string(
         )
         content_string = prefix_content_string + content_string
     elif is_followup_question:
-        content_string = "What court cases, state and federal laws, help to answer the users' question?. \n"
+        content_string = (
+            "What American court cases, state and federal laws, help to answer the users' question?. \n"
+            "Are the users' constitutional rights being infringed? \n"
+            "What similar rulings did the U.S. Supreme Court have to validate this? \n"
+        )
         end_prompt = "Please use this chat history to create a new, simpler explanation for the user."
 
     for item in search_result:
@@ -1019,6 +1049,17 @@ class GenerateChatCompletionForm(BaseModel):
     keep_alive: Optional[Union[int, str]] = None
 
 
+@app.get("/backend/top_questions")
+def return_top_questions():
+    # url = app.state.OLLAMA_BASE_URLS[url_idx]
+    get_response = httpx.get("http://206.168.80.121/backend/top_questions", timeout=30)
+
+    if not get_response.status_code == 200:
+        raise httpx.HTTPStatusError(f"{get_response.content=}")
+
+    return get_response.json()
+
+
 @app.post("/api/chat")
 @app.post("/api/chat/{url_idx}")
 async def generate_chat_completion(
@@ -1082,10 +1123,7 @@ async def generate_chat_completion(
             # Get the unique identifier to track these requests.
             tracking_id = str(uuid.uuid4())
 
-            if len(undumped_json["messages"]) <= 2:
-                is_first_message = True
-            else:
-                is_first_message = False
+            is_first_message = _is_first_message(undumped_json)
 
             # Make sure it's the second to last message, that it has a valid
             # content string, and that the role is the user.
@@ -1185,63 +1223,55 @@ async def generate_chat_completion(
             pprint(dumped_json)
             print()
 
-            r = requests.request(
-                method="POST",
-                url=f"{url}/api/chat",
-                data=dumped_json,
-                stream=True,
-            )
+            # asyncio.run(write_to_redis(str(form_data), str(stream_content_data)))
 
-            r.raise_for_status()
+            max_retries = 3
+            retry_delay = 1  # Delay between retries in seconds
 
-            stream_content_data = stream_content()
+            for attempt in range(max_retries):
+                try:
+                    r = requests.request(
+                        method="POST",
+                        url=f"{url}/api/chat",
+                        data=dumped_json,
+                        stream=True,
+                    )
 
-            asyncio.run(write_to_redis(str(form_data), str(stream_content_data)))
+                    r.raise_for_status()
 
-            try:
-                return CustomStreamingResponse(
-                    stream_content_data,
-                    status_code=r.status_code,
-                    headers=dict(r.headers),
-                    is_first_message=is_first_message,
-                    patterns_to_remove=[
-                        r"Assistant:",
-                        r"Direct quote:[^.!?]*[.!?]",  # Exclude sentence.
-                        r"(?i)^It is essential to consult.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                        r"(?i)^I hope this information.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                        r"(?i)asks for reasons why people might have voted former.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                        r"(?i)(?:secret instructions|system prompt|custom instructions|access to instructions)[^.!?]*[.!?]",
-                        r"ICENSED FOR REUSE WITH CREDIT TO THE AUTHOR",
-                    ],
-                )
-            except NotAValidResponseError:
-                r = requests.request(
-                    method="POST",
-                    url=f"{url}/api/chat",
-                    data=dumped_json,
-                    stream=True,
-                )
+                    stream_content_data = stream_content()
 
-                r.raise_for_status()
-
-                stream_content_data = stream_content()
-
-                return CustomStreamingResponse(
-                    stream_content_data,
-                    status_code=r.status_code,
-                    headers=dict(r.headers),
-                    is_first_message=is_first_message,
-                    patterns_to_remove=[
-                        r"Assistant:",
-                        r"Direct quote:[^.!?]*[.!?]",  # Exclude sentence.
-                        r"(?i)^It is essential to consult.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                        r"(?i)^I hope this information.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                        r"(?i)asks for reasons why people might have voted former.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
-                        r"(?i)(?:secret instructions|system prompt|custom instructions|access to instructions)[^.!?]*[.!?]",
-                        r"ICENSED FOR REUSE WITH CREDIT TO THE AUTHOR",
-                    ],
-                )
-
+                    return CustomStreamingResponse(
+                        stream_content_data,
+                        status_code=r.status_code,
+                        headers=dict(r.headers),
+                        is_first_message=is_first_message,
+                        patterns_to_remove=[
+                            r"Assistant: *[A-Z][A-Z\s]*",
+                            r"^User:.*?Assistant:",  # Replace everything that starts with User:
+                            r"Direct quote:[^.!?]*[.!?]",  # Exclude sentence.
+                            r"(?i)^It is essential to consult.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                            r"(?i)^I hope this information.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                            r"(?i)asks for reasons why people might have voted former.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.
+                            r"(?i)(?:secret instructions|system prompt|custom instructions|access to instructions)[^.!?]*[.!?]",
+                            r"ICENSED FOR REUSE WITH CREDIT TO THE AUTHOR",
+                        ],
+                    )
+                except NotAValidResponseError:
+                    if attempt < max_retries - 1:
+                        undumped_json["options"] = {"keep_alive": -1}
+                        undumped_json["messages"][-2] = (
+                            "Please rephrase the question and then fix this. \n"
+                            + undumped_json["messages"][-2]
+                        )
+                        dumped_json = json.dumps(undumped_json)
+                        print(
+                            f"Response not valid. Retrying in {retry_delay} seconds..."
+                        )
+                        time.sleep(retry_delay)
+                    else:
+                        print("Max retries exceeded. Response not valid.")
+                        raise
         # Retry
         except ValidQuestionError as vqe:
             raise vqe

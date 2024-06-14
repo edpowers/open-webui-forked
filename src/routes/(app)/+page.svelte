@@ -721,6 +721,27 @@
 
 	const regenerateResponse = async () => {
 		console.log('regenerateResponse');
+		if (messages.length !== 0 && messages.at(-1).done === true) {
+			messages.splice(messages.length - 1, 1);
+			messages = messages;
+
+			const userMessage = messages.at(-1);
+			const userPrompt = userMessage.content;
+
+			// Set regenerateAttempted to true for the user message
+			userMessage.regenerateAttempted = true;
+
+			// Clear the current error message
+			userMessage.error = false;
+			userMessage.content = '';
+
+			// Initiate a new request to the backend
+			await sendPrompt(userPrompt, userMessage.id);
+		}
+	};
+
+	const _regenerateResponse = async () => {
+		console.log('regenerateResponse');
 		if (messages.length != 0 && messages.at(-1).done == true) {
 			messages.splice(messages.length - 1, 1);
 			messages = messages;

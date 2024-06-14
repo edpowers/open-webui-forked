@@ -1,3 +1,4 @@
+import { faker } from '@faker-js/faker';
 import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 export const getSessionUser = async (token: string) => {
@@ -57,6 +58,35 @@ export const userSignIn = async (email: string, password: string) => {
 
 	return res;
 };
+
+
+const generateRandomEmail = (): string => {
+	return faker.internet.email();
+  };
+
+const generateRandomPassword = (): string => {
+	return faker.internet.password(10);
+};
+
+const generateRandomProfileImageUrl = (): string => {
+	return faker.image.avatar();
+};
+
+export const guestRegister = async () => {
+	const name = "Guest User";
+	const email = generateRandomEmail();
+	const password = generateRandomPassword();
+	const profileImageUrl = generateRandomProfileImageUrl();
+
+	try {
+	  const response = await userSignUp(name, email, password, profileImageUrl);
+	  return response;
+	} catch (error) {
+	  console.log('Error during guest registration:', error);
+	  throw error;
+	}
+  };
+
 
 export const userSignUp = async (
 	name: string,

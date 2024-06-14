@@ -54,6 +54,7 @@ faster-whisper
 
 PyJWT
 pyjwt[crypto]
+uvicorn[standard]
 
 black
 langfuse
@@ -63,3 +64,5 @@ aioredis
 redis>=4.2.0rc1
 qdrant-client
 openapi
+sentry_sdk
+httpx

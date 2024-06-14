@@ -6,10 +6,12 @@
 
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { user, chats, settings, showSettings, chatId, tags } from '$lib/stores';
+	import { user, chats, top_questions, settings, showSettings, chatId, tags } from '$lib/stores';
 	import { onMount, getContext } from 'svelte';
 
 	const i18n = getContext('i18n');
+
+	import { getTopQuestions } from '$lib/apis/ollama';
 
 	import {
 		deleteChatById,
@@ -49,9 +51,74 @@
 	let showDropdown = false;
 	let isEditing = false;
 
+
+	async function openNewChatWithText(text: string): Promise<void> {
+		// Assuming you have a way to create a new chat and get its ID
+		const newChatId = await createNewChat();
+		await goto(`/c/${newChatId}`);
+
+		// Wait for the new chat to open and find the chat box
+		setTimeout(() => {
+		const chatBox = document.querySelector("#chat-textarea");
+		if (chatBox) {
+			(chatBox as HTMLTextAreaElement).value = text; // Set the text in the chat box
+			const event = new Event('input', { bubbles: true });
+			chatBox.dispatchEvent(event); // Dispatch an input event to ensure the text is recognized
+
+			// Find and click the send button
+			const sendButton = document.querySelector("#send-message-button");
+			setTimeout(() => {
+			sendButton?.click();
+			}, 0);
+		}
+		}, 1000); // Adjust this timeout as needed to ensure the new chat is fully loaded
+	}
+
+	function handleClick(text: [string, number]): void {
+		// Ensure the input is an array with the correct types
+		if (!Array.isArray(text) || typeof text[0] !== 'string' || typeof text[1] !== 'number') {
+			console.error('Input text is not a valid array:', text);
+			return;
+		}
+
+		let [question, popularity] = text;
+
+		// Remove trailing comma and digit if present
+		question = question.replace(/,\d$/, '');
+
+		// Split on the first question mark and take the first part if a question mark exists
+		const questionMarkIndex = question.indexOf('?');
+		if (questionMarkIndex !== -1) {
+			question = question.substring(0, questionMarkIndex + 1);
+		}
+
+		// Use the processed question for opening a new chat
+		openNewChatWithText(question);
+
+		// You can use popularity for something else if needed, e.g., logging
+		console.log(`Question: "${question}", Popularity: ${popularity}`);
+	}
+
+	async function createNewChat(): Promise<string> {
+		// Logic to create a new chat and return its ID
+		// This is a placeholder implementation
+		const response = await fetch('/api/chats', {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'Authorization': `Bearer ${localStorage.token}`
+		},
+		body: JSON.stringify({ title: 'New Chat' })
+		});
+		const chat = await response.json();
+		return chat.id;
+	}
+
+
 	onMount(async () => {
 		show = window.innerWidth > BREAKPOINT;
 		await chats.set(await getChatList(localStorage.token));
+		await top_questions.set(await getTopQuestions(localStorage.token));
 
 		let touchstartX = 0;
 		let touchendX = 0;
@@ -154,23 +221,27 @@
 		await archiveChatById(localStorage.token, id);
 		await chats.set(await getChatList(localStorage.token));
 	};
+
 </script>
 
 <style>
-	.chat-container {
-	  height: 33.33%;
+.chat-container {
+	  height: 100%;
 	  overflow-y: auto;
 	}
 
 .popular-asks, .legal-resources {
-	padding-left: 2rem;
+	height: 33.33%;
+	padding-left: 0.25rem;
 	margin-top: 0.5rem;
-	margin-bottom: 2rem;
+	margin-bottom: 1rem;
 	display: flex;
 	flex-direction: column;
 	space-y: 1rem;
 	background-color: var(--bg-color); /* Adjust background color as needed */
 	border-radius: 0.75rem; /* Adjust border radius as needed */
+	overflow-x: hidden; /* Prevent overflow */
+	overflow-y: auto;
   }
 
 .popular-asks h2, .legal-resources h2 {
@@ -180,11 +251,24 @@
     text-align: left; /* Left justify the text */
 }
 
-  .popular-asks div, .legal-resources div {
-	padding: 0.75rem;
-	background-color: var(--section-content-bg-color); /* Adjust content background color as needed */
-	border-radius: 0 0 0.75rem 0.75rem; /* Adjust border radius as needed */
+.ask-item {
+    margin-bottom: 1rem;
+    overflow: hidden; /* Prevent overflow in each ask item */
   }
+
+.ask-question {
+	display: block;
+	font-weight: bold;
+	white-space: nowrap; /* Prevent text from wrapping */
+	overflow: hidden; /* Hide overflow */
+	text-overflow: ellipsis; /* Display ellipsis for overflowed text */
+	cursor: pointer;
+	text-decoration: underline;
+}
+
+.ask-count {
+    color: gray;
+}
 
 </style>
 
@@ -664,15 +748,20 @@
 			</div>
 
 			<!-- Popular Asks Section -->
-			<div class="popular-asks">
+			<div class="px-3.5 popular-asks">
 				<h2 class="text-xl font-bold">Popular Asks</h2>
 				<div>
-				<!-- Add your popular asks content here -->
+					{#each Object.entries($top_questions) as question, count}
+					<div class="ask-item">
+						<a on:click={() => handleClick(question)} class="ask-question px-3.5">{question}</a>
+					  <p class="ask-count px-3.5">Popularity: {question[1]}</p>
+					</div>
+				  {/each}
 				</div>
 			</div>
 
 			<!-- Legal Resources Section -->
-			<div class="legal-resources">
+			<div class="px-3.5 legal-resources">
 				<h2 class="text-xl font-bold">Legal Resources</h2>
 				<div>
 				<!-- Add your legal resources content here -->
