@@ -129,6 +129,7 @@
 									throw data.error;
 								}
 								if (data.detail) {
+									console.error(`detail in data ${data}`)
 									throw data.detail;
 								}
 

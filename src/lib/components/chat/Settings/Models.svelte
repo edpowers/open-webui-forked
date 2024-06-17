@@ -100,11 +100,11 @@
 							if (line !== '') {
 								let data = JSON.parse(line);
 
-								console.log(data);
 								if (data.error) {
 									throw data.error;
 								}
 								if (data.detail) {
+									console.error(`detail in data ${data}`)
 									throw data.detail;
 								}
 								if (data.status) {
@@ -171,11 +171,12 @@
 					for (const line of lines) {
 						if (line !== '') {
 							let data = JSON.parse(line);
-							console.log(data);
+
 							if (data.error) {
 								throw data.error;
 							}
 							if (data.detail) {
+								console.error(`detail in data ${data}`)
 								throw data.detail;
 							}
 

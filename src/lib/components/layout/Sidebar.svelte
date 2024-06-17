@@ -759,17 +759,7 @@
 				  {/each}
 				</div>
 			</div>
-
-			<!-- Legal Resources Section -->
-			<div class="px-3.5 legal-resources">
-				<h2 class="text-xl font-bold">Legal Resources</h2>
-				<div>
-				<!-- Add your legal resources content here -->
-				</div>
-			</div>
-
 		</div>
-
 
 		<div class="px-2.5">
 			<!-- <hr class=" border-gray-900 mb-1 w-full" /> -->

@@ -220,6 +220,9 @@ def _append_rag_context_to_content_string(
         if item.score < 0.40:
             continue
 
+        if "answer" not in item.payload:
+            raise KeyError(f"answer not in {item.payload=}")
+
         content_string += str(item.payload["answer"]) + "\n "
 
         content_string += "\n"
@@ -273,6 +276,7 @@ def prepare_undumped_json_for_infererence(undumped_json: dict) -> dict:
             break
 
     if len(str(messages_to_send)) < 1000 and original_length > 1000:
+        pprint(messages_to_send)
         undumped_json["messages"] = original_messages
         return undumped_json
 
@@ -1246,8 +1250,11 @@ async def generate_chat_completion(
                         status_code=r.status_code,
                         headers=dict(r.headers),
                         is_first_message=is_first_message,
+                        last_message=last_message,
                         patterns_to_remove=[
-                            r"Assistant: *[A-Z][A-Z\s]*",
+                            r"Assistant:?[\s]*[A-Z][A-Z\s]*",
+                            r"(?i)(^If someone asks me about my opinions.*?\.)|(?=^.*I support former president Donald Trump.*?$).*\.",
+                            # r"(?i)((?=^.*some supported him for reasons such as his commitment.*?$).*\.",
                             r"^User:.*?Assistant:",  # Replace everything that starts with User:
                             r"Direct quote:[^.!?]*[.!?]",  # Exclude sentence.
                             r"(?i)^It is essential to consult.*?(?:\n\s*\n|$)",  # Exclude entire paragraph.

@@ -112,8 +112,8 @@
 								// responseMessage.done = true;
 								console.log('done');
 							} else {
+								console.log(line);
 								let data = JSON.parse(line.replace(/^data: /, ''));
-								console.log(data);
 
 								if ('request_id' in data) {
 									currentRequestId = data.request_id;

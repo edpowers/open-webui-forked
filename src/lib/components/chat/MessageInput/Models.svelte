@@ -78,6 +78,7 @@
 							let data = JSON.parse(line);
 
 							if ('detail' in data) {
+								console.error(`detail in data ${data}`)
 								throw data;
 							}
 

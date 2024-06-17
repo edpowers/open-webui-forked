@@ -32,7 +32,7 @@ async function* openAIStreamToIterator(
 				line = line.slice(0, -1);
 			}
 			if (line !== '') {
-				console.log(line);
+				// console.log(line);
 				if (line === 'data: [DONE]') {
 					yield { done: true, value: '' };
 				} else if (line.startsWith(':')) {
@@ -41,8 +41,8 @@ async function* openAIStreamToIterator(
 					continue;
 				} else {
 					try {
+						// console.log(`Value of ${line}`);
 						const data = JSON.parse(line.replace(/^data: /, ''));
-						console.log(data);
 
 						if (data.choices) {
 						  yield { done: false, value: data.choices?.[0]?.delta?.content ?? '' };

@@ -281,7 +281,7 @@ export const generateEmbeddings = async (token: string = '', model: string, text
 	return res;
 };
 
-export const generateTextCompletion = async (token: string = '', model: string, text: string) => {
+export const __generateTextCompletion = async (token: string = '', model: string, text: string) => {
 	let error = null;
 
 	const res = await fetch(`${OLLAMA_API_BASE_URL}/api/generate`, {
@@ -308,7 +308,7 @@ export const generateTextCompletion = async (token: string = '', model: string, 
 	return res;
 };
 
-export const generateChatCompletion = async (token: string = '', body: object) => {
+export const ___generateChatCompletion = async (token: string = '', body: object) => {
 	let controller = new AbortController();
 	let error = null;
 
@@ -327,11 +327,81 @@ export const generateChatCompletion = async (token: string = '', body: object) =
 	});
 
 	if (error) {
+		console.error(`Error ${error}`)
 		throw error;
 	}
 
+	// If "message" not in the res.
+
 	return [res, controller];
 };
+
+
+export const checkMessageLength = async (responseMessageId: string) => {
+	// Construct the class name to find
+	const className = `message-${responseMessageId}`;
+
+	// Find the element with the specified class name
+	const element = document.querySelector(`.${className}`);
+
+	// If the element is not found, return false
+	if (!element) {
+		console.warn(`Element with class ${className} not found.`);
+		return false;
+	}
+
+	// Get all text within the element and its descendants
+	const textContent = element.textContent || '';
+
+	// Check if the textContent is shorter than 100 characters and does not end with a period
+	if (textContent.length < 100 && !textContent.endsWith('.')) {
+		return true;
+	} else {
+		return false;
+	}
+};
+
+export const generateChatCompletion = async (token: string = '', body: object, retries: number = 3) => {
+    let error = null;
+    let chat_completion_attempts = 0;
+	let controller = new AbortController();
+
+    while (chat_completion_attempts < retries) {
+        chat_completion_attempts++;
+
+        const res = await fetch(`${OLLAMA_API_BASE_URL}/api/chat`, {
+            signal: controller.signal,
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify(body)
+        }).catch((err) => {
+            error = err;
+            // return null;
+        });
+
+		if (res.status === 400 && chat_completion_attempts < retries) {
+            console.warn('Received 400 response, retrying...');
+            continue; // Retry the request
+        }
+
+        if (error) {
+            console.error(`Error ${error}`);
+            throw error;
+		}
+
+        if (res.ok) {
+            return [res, controller];
+        }
+    }
+
+    throw new Error('Max retries reached for generate chat completion.. The response is not valid.');
+};
+
+
 
 export const cancelOllamaRequest = async (token: string = '', requestId: string) => {
 	let error = null;

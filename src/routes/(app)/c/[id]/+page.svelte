@@ -19,7 +19,7 @@
 	} from '$lib/stores';
 	import { copyToClipboard, splitStream, convertMessagesToHistory } from '$lib/utils';
 
-	import { generateChatCompletion, cancelOllamaRequest } from '$lib/apis/ollama';
+	import { generateChatCompletion, cancelOllamaRequest, checkMessageLength } from '$lib/apis/ollama';
 	import {
 		addTagById,
 		createNewChat,
@@ -53,6 +53,7 @@
 	let processing = '';
 	let messagesContainerElement: HTMLDivElement;
 	let currentRequestId = null;
+	let controller = ''
 
 	// let chatId = $page.params.id;
 	let showModelSelector = true;
@@ -121,6 +122,35 @@
 	//////////////////////////
 	// Web functions
 	//////////////////////////
+
+	function sleep(ms: number): Promise<void> {
+		return new Promise(resolve => setTimeout(resolve, ms));
+	}
+
+	function handlePrompt(attempts: number, userPrompt: string, parentId): string {
+		// Check if attempts > 0 and the prompt contains "test for llm throw"
+		if (attempts > 0 && userPrompt.includes("test for llm throw")) {
+			// Return the new prompt
+			history.messages[parentId].content = "How can I know my constitutional rights?";
+		};
+	}
+
+	class JsonParsingError extends Error {
+		constructor(message: string) {
+			super(message);
+			this.name = "JsonParsingError";
+		}
+	}
+
+	function parseJsonWithLogging(jsonString: string): any {
+		try {
+			return JSON.parse(jsonString);
+		} catch (error) {
+			console.error("Failed to parse JSON:", jsonString);
+			// throw error;
+			throw new JsonParsingError('Failed to parse JSON after maximum retries');
+		}
+	}
 
 	const loadChat = async () => {
 		await chatId.set($page.params.id);
@@ -253,6 +283,7 @@
 		}
 	};
 	const sendPrompt = async (prompt, parentId) => {
+		console.log("Sending prompt - (app) c [id]")
 		const _chatId = JSON.parse(JSON.stringify($chatId));
 
 		await Promise.all(
@@ -285,9 +316,11 @@
 					}
 
 					if (model?.external) {
+						console.log("Sending prompt to OpenAI")
 						await sendPromptOpenAI(model, prompt, responseMessageId, _chatId);
 					} else if (model) {
-						await sendPromptOllama(model, prompt, responseMessageId, _chatId);
+						console.log("Sending prompt to Ollama")
+						await sendPromptOllama(model, prompt, parentId, responseMessageId, _chatId);
 					}
 				} else {
 					toast.error($i18n.t(`Model {{modelId}} not found`, { modelId }));
@@ -298,243 +331,278 @@
 		await chats.set(await getChatList(localStorage.token));
 	};
 
-	const sendPromptOllama = async (model, userPrompt, responseMessageId, _chatId) => {
+	const sendPromptOllama = async (model, userPrompt, parentId, responseMessageId, _chatId, maxRetries = 1, delay = 500) => {
+		let attempts = 0;
 		model = model.id;
-		const responseMessage = history.messages[responseMessageId];
+		let model_save = model.id;
 
-		// Wait until history/message have been updated
-		await tick();
+		while (attempts < maxRetries) {
+			try {
+				const responseMessage = history.messages[responseMessageId];
 
-		// Scroll down
-		scrollToBottom();
+				// Wait until history/message have been updated
+				await tick();
 
-		const messagesBody = [
-			$settings.system
-				? {
-						role: 'system',
-						content: $settings.system
-				  }
-				: undefined,
-			...messages
-		]
-			.filter((message) => message)
-			.map((message, idx, arr) => {
-				// Prepare the base message object
-				const baseMessage = {
-					role: message.role,
-					content: arr.length - 2 !== idx ? message.content : message?.raContent ?? message.content
-				};
+				// handlePrompt(attempts, userPrompt, parentId);
 
-				// Extract and format image URLs if any exist
-				const imageUrls = message.files
-					?.filter((file) => file.type === 'image')
-					.map((file) => file.url.slice(file.url.indexOf(',') + 1));
+				// Scroll down
+				scrollToBottom();
 
-				// Add images array only if it contains elements
-				if (imageUrls && imageUrls.length > 0 && message.role === 'user') {
-					baseMessage.images = imageUrls;
-				}
+				const messagesBody = [
+					$settings.system
+						? {
+								role: 'system',
+								content: $settings.system
+						}
+						: undefined,
+					...messages
+				]
+					.filter((message) => message)
+					.map((message, idx, arr) => {
+						// Prepare the base message object
+						const baseMessage = {
+							role: message.role,
+							content: arr.length - 2 !== idx ? message.content : message?.raContent ?? message.content
+						};
 
-				return baseMessage;
-			});
+						// Extract and format image URLs if any exist
+						const imageUrls = message.files
+							?.filter((file) => file.type === 'image')
+							.map((file) => file.url.slice(file.url.indexOf(',') + 1));
 
-		let lastImageIndex = -1;
+						// Add images array only if it contains elements
+						if (imageUrls && imageUrls.length > 0 && message.role === 'user') {
+							baseMessage.images = imageUrls;
+						}
 
-		// Find the index of the last object with images
-		messagesBody.forEach((item, index) => {
-			if (item.images) {
-				lastImageIndex = index;
-			}
-		});
+						return baseMessage;
+					});
 
-		// Remove images from all but the last one
-		messagesBody.forEach((item, index) => {
-			if (index !== lastImageIndex) {
-				delete item.images;
-			}
-		});
+				let lastImageIndex = -1;
 
-		const docs = messages
-			.filter((message) => message?.files ?? null)
-			.map((message) =>
-				message.files.filter((item) => item.type === 'doc' || item.type === 'collection')
-			)
-			.flat(1);
-
-		const [res, controller] = await generateChatCompletion(localStorage.token, {
-			model: model,
-			messages: messagesBody,
-			options: {
-				...($settings.options ?? {}),
-				stop:
-					$settings?.options?.stop ?? undefined
-						? $settings.options.stop.map((str) =>
-								decodeURIComponent(JSON.parse('"' + str.replace(/\"/g, '\\"') + '"'))
-						  )
-						: undefined
-			},
-			format: $settings.requestFormat ?? undefined,
-			keep_alive: $settings.keepAlive ?? undefined,
-			docs: docs.length > 0 ? docs : undefined
-		});
-
-		if (res && res.ok) {
-			console.log('controller', controller);
-
-			const reader = res.body
-				.pipeThrough(new TextDecoderStream())
-				.pipeThrough(splitStream('\n'))
-				.getReader();
-
-			while (true) {
-				const { value, done } = await reader.read();
-				if (done || stopResponseFlag || _chatId !== $chatId) {
-					responseMessage.done = true;
-					messages = messages;
-
-					if (stopResponseFlag) {
-						controller.abort('User: Stop Response');
-						await cancelOllamaRequest(localStorage.token, currentRequestId);
+				// Find the index of the last object with images
+				messagesBody.forEach((item, index) => {
+					if (item.images) {
+						lastImageIndex = index;
 					}
+				});
 
-					currentRequestId = null;
+				// Remove images from all but the last one
+				messagesBody.forEach((item, index) => {
+					if (index !== lastImageIndex) {
+						delete item.images;
+					}
+				});
 
-					break;
-				}
+				const docs = messages
+					.filter((message) => message?.files ?? null)
+					.map((message) =>
+						message.files.filter((item) => item.type === 'doc' || item.type === 'collection')
+					)
+					.flat(1);
 
-				try {
-					let lines = value.split('\n');
+				const [res, controller] = await generateChatCompletion(localStorage.token, {
+					model: model || model_save,
+					messages: messagesBody,
+					options: {
+						...($settings.options ?? {}),
+						stop:
+							$settings?.options?.stop ?? undefined
+								? $settings.options.stop.map((str) =>
+										decodeURIComponent(JSON.parse('"' + str.replace(/\"/g, '\\"') + '"'))
+								)
+								: undefined
+					},
+					format: $settings.requestFormat ?? undefined,
+					keep_alive: $settings.keepAlive ?? undefined,
+					docs: docs.length > 0 ? docs : undefined
+				});
 
-					for (const line of lines) {
-						if (line !== '') {
-							console.log(line);
-							let data = JSON.parse(line);
+				if (res && res.ok) {
+					console.log('controller', controller);
 
-							if ('detail' in data) {
-								throw data;
+					const reader = res.body
+						.pipeThrough(new TextDecoderStream())
+						.pipeThrough(splitStream('\n'))
+						.getReader();
+
+					while (true) {
+						const { value, done } = await reader.read();
+						if (done || stopResponseFlag || _chatId !== $chatId) {
+							responseMessage.done = true;
+							messages = messages;
+
+							if (stopResponseFlag) {
+								controller.abort('User: Stop Response');
+								await cancelOllamaRequest(localStorage.token, currentRequestId);
 							}
 
-							if ('id' in data) {
-								console.log(data);
-								currentRequestId = data.id;
-							} else {
-								if (data.done == false) {
-									if (responseMessage.content == '' && data.message.content == '\n') {
-										continue;
+							currentRequestId = null;
+
+							break;
+						}
+
+						try {
+							let lines = value.split('\n');
+
+							for (const line of lines) {
+								if (line !== '') {
+									// console.log(line);
+									let data = parseJsonWithLogging(line);
+									// let data = JSON.parse(line);
+
+									if ('detail' in data) {
+										console.error(`detail in data ${data}`)
+										throw data;
+									}
+
+									if ('id' in data) {
+										console.log(data);
+										currentRequestId = data.id;
 									} else {
-										responseMessage.content += data.message.content;
-										messages = messages;
-									}
-								} else {
-									responseMessage.done = true;
-
-									if (responseMessage.content == '') {
-										responseMessage.error = true;
-										responseMessage.content =
-											'Oops! No text generated from Ollama, Please try again.';
-									}
-
-									responseMessage.context = data.context ?? null;
-									responseMessage.info = {
-										total_duration: data.total_duration,
-										load_duration: data.load_duration,
-										sample_count: data.sample_count,
-										sample_duration: data.sample_duration,
-										prompt_eval_count: data.prompt_eval_count,
-										prompt_eval_duration: data.prompt_eval_duration,
-										eval_count: data.eval_count,
-										eval_duration: data.eval_duration
-									};
-									messages = messages;
-
-									if ($settings.notificationEnabled && !document.hasFocus()) {
-										const notification = new Notification(
-											selectedModelfile
-												? `${
-														selectedModelfile.title.charAt(0).toUpperCase() +
-														selectedModelfile.title.slice(1)
-												  }`
-												: `${model}`,
-											{
-												body: responseMessage.content,
-												icon: selectedModelfile?.imageUrl ?? `${WEBUI_BASE_URL}/static/favicon.ico`
+										if (data.done == false) {
+											if (responseMessage.content == '' && data.message.content == '\n') {
+												continue;
+											} else {
+												responseMessage.content += data.message.content;
+												messages = messages;
 											}
-										);
-									}
+										} else {
+											responseMessage.done = true;
 
-									if ($settings.responseAutoCopy) {
-										copyToClipboard(responseMessage.content);
-									}
+											if (responseMessage.content == '') {
+												responseMessage.error = true;
+												responseMessage.content =
+													'Oops! No text generated from Ollama, Please try again.';
+											}
 
-									if ($settings.responseAutoPlayback) {
-										await tick();
-										document.getElementById(`speak-button-${responseMessage.id}`)?.click();
+											responseMessage.context = data.context ?? null;
+											responseMessage.info = {
+												total_duration: data.total_duration,
+												load_duration: data.load_duration,
+												sample_count: data.sample_count,
+												sample_duration: data.sample_duration,
+												prompt_eval_count: data.prompt_eval_count,
+												prompt_eval_duration: data.prompt_eval_duration,
+												eval_count: data.eval_count,
+												eval_duration: data.eval_duration
+											};
+											messages = messages;
+
+											if ($settings.notificationEnabled && !document.hasFocus()) {
+												const notification = new Notification(
+													selectedModelfile
+														? `${
+																selectedModelfile.title.charAt(0).toUpperCase() +
+																selectedModelfile.title.slice(1)
+														}`
+														: `${model}`,
+													{
+														body: responseMessage.content,
+														icon: selectedModelfile?.imageUrl ?? `${WEBUI_BASE_URL}/static/favicon.ico`
+													}
+												);
+											}
+
+											if ($settings.responseAutoCopy) {
+												copyToClipboard(responseMessage.content);
+											}
+
+											if ($settings.responseAutoPlayback) {
+												await tick();
+												document.getElementById(`speak-button-${responseMessage.id}`)?.click();
+											}
+										}
 									}
 								}
 							}
+						} catch (error) {
+							console.log(error);
+							if ('detail' in error) {
+								toast.error(error.detail);
+							}
+							break;
+						}
+
+						if (autoScroll) {
+							scrollToBottom();
 						}
 					}
-				} catch (error) {
-					console.log(error);
-					if ('detail' in error) {
-						toast.error(error.detail);
+
+					if ($chatId == _chatId) {
+						if ($settings.saveChatHistory ?? true) {
+							chat = await updateChatById(localStorage.token, _chatId, {
+								messages: messages,
+								history: history
+							});
+							await chats.set(await getChatList(localStorage.token));
+						}
 					}
-					break;
+				} else {
+					if (res !== null) {
+						const error = await res.json();
+						console.log(error);
+						if ('detail' in error) {
+							toast.error(error.detail);
+							responseMessage.content = error.detail;
+						} else {
+							toast.error(error.error);
+							responseMessage.content = error.error;
+						}
+					} else {
+						toast.error(
+							$i18n.t(`Uh-oh! There was an issue connecting to {{provider}}.`, { provider: 'Ollama' })
+						);
+						responseMessage.content = $i18n.t(`Uh-oh! There was an issue connecting to {{provider}}.`, {
+							provider: 'Ollama'
+						});
+					}
+
+					responseMessage.error = true;
+					responseMessage.content = $i18n.t(`Uh-oh! There was an issue connecting to {{provider}}.`, {
+						provider: 'Ollama'
+					});
+					responseMessage.done = true;
+					messages = messages;
 				}
+
+				stopResponseFlag = false;
+				await tick();
 
 				if (autoScroll) {
 					scrollToBottom();
 				}
-			}
 
-			if ($chatId == _chatId) {
-				if ($settings.saveChatHistory ?? true) {
-					chat = await updateChatById(localStorage.token, _chatId, {
-						messages: messages,
-						history: history
-					});
-					await chats.set(await getChatList(localStorage.token));
+				if (messages.length == 2 && messages.at(1).content !== '') {
+					window.history.replaceState(history.state, '', `/c/${_chatId}`);
+					const _title = await generateChatTitle(userPrompt);
+					await setChatTitle(_chatId, _title);
 				}
+
+				attempts = maxRetries + 1;
+			}	catch(error) {
+					if (error instanceof JsonParsingError) {
+						console.error('Custom Error:', error.message);
+
+						attempts++;
+						console.error(`Attempt ${attempts} failed: ${error.message}`);
+
+						// await sleep(3000); // Sleep for 3000 milliseconds (3 seconds)
+						//controller.abort('User: Stop Response');
+						// await cancelOllamaRequest(localStorage.token, currentRequestId);
+
+						if (attempts >= maxRetries) {
+							throw new Error('Failed to complete request after maximum retries');
+						}
+
+						// Wait before retrying
+						await new Promise(resolve => setTimeout(resolve, delay));
+
+					} else {
+						console.error('Other Error:', error.message);
+						throw error;
+					}
 			}
-		} else {
-			if (res !== null) {
-				const error = await res.json();
-				console.log(error);
-				if ('detail' in error) {
-					toast.error(error.detail);
-					responseMessage.content = error.detail;
-				} else {
-					toast.error(error.error);
-					responseMessage.content = error.error;
-				}
-			} else {
-				toast.error(
-					$i18n.t(`Uh-oh! There was an issue connecting to {{provider}}.`, { provider: 'Ollama' })
-				);
-				responseMessage.content = $i18n.t(`Uh-oh! There was an issue connecting to {{provider}}.`, {
-					provider: 'Ollama'
-				});
-			}
-
-			responseMessage.error = true;
-			responseMessage.content = $i18n.t(`Uh-oh! There was an issue connecting to {{provider}}.`, {
-				provider: 'Ollama'
-			});
-			responseMessage.done = true;
-			messages = messages;
-		}
-
-		stopResponseFlag = false;
-		await tick();
-
-		if (autoScroll) {
-			scrollToBottom();
-		}
-
-		if (messages.length == 2 && messages.at(1).content !== '') {
-			window.history.replaceState(history.state, '', `/c/${_chatId}`);
-			const _title = await generateChatTitle(userPrompt);
-			await setChatTitle(_chatId, _title);
 		}
 	};
 
@@ -731,7 +799,7 @@
 		console.log('stopResponse');
 	};
 
-	const regenerateResponse = async () => {
+	const r_egenerateResponse = async () => {
 		console.log('regenerateResponse');
 		if (messages.length != 0 && messages.at(-1).done == true) {
 			messages.splice(messages.length - 1, 1);
@@ -741,6 +809,28 @@
 			let userPrompt = userMessage.content;
 
 			await sendPrompt(userPrompt, userMessage.id);
+		}
+	};
+
+	const regenerateResponse = async () => {
+		console.log('regenerateResponse - trying regenerate');
+		if (messages.length !== 0 && messages.at(-1).done === true) {
+			messages.splice(messages.length - 1, 1);
+			messages = messages;
+
+			const userMessage = messages.at(-1);
+			const userPrompt = userMessage.content;
+
+			// Set regenerateAttempted to true for the user message
+			userMessage.regenerateAttempted = true;
+
+			// Clear the current error message
+			userMessage.error = false;
+			userMessage.content = '';
+
+			// Initiate a new request to the backend
+			await sendPrompt(userPrompt, userMessage.id);
+			console.log(`Sending prompt ${userPrompt}`)
 		}
 	};
 

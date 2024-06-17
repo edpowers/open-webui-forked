@@ -158,6 +158,7 @@ SYSTEM """${system}"""`.replace(/^\s*\n/gm, '');
 									throw data.error;
 								}
 								if (data.detail) {
+									console.error(`detail in data ${data}`)
 									throw data.detail;
 								}
 

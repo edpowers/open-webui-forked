@@ -4,6 +4,7 @@ import re
 import typing
 from functools import partial
 import json
+import random
 
 from dataclasses import dataclass
 
@@ -45,6 +46,8 @@ class NotAValidResponseError(Exception):
 class CustomStreamingResponse(Response):
     body_iterator: AsyncContentStream
 
+    http_headers_sent: bool = False
+
     def __init__(
         self,
         content: ContentStream,
@@ -52,6 +55,7 @@ class CustomStreamingResponse(Response):
         headers: typing.Mapping[str, str] | None = None,
         media_type: str | None = None,
         background: BackgroundTask | None = None,
+        last_message: str = "",
         patterns_to_remove: list[str] | None = None,
         is_first_message: bool = False,
     ) -> None:
@@ -63,6 +67,7 @@ class CustomStreamingResponse(Response):
         self.media_type = self.media_type if media_type is None else media_type
         self.background = background
         self.is_first_message = is_first_message
+        self.last_message: str = last_message
         self.patterns_to_remove = patterns_to_remove or []
         self.error_patterns = r"Geplaatst|/\*\*\*\*\*\*/|ityEngine"
         self.init_headers(headers)
@@ -74,14 +79,6 @@ class CustomStreamingResponse(Response):
                 break
 
     async def stream_response(self, send: Send) -> None:
-        await send(
-            {
-                "type": "http.response.start",
-                "status": self.status_code,
-                "headers": self.raw_headers,
-            }
-        )
-
         buffer = bytearray()
         total_buffer_len = 0
 
@@ -103,51 +100,49 @@ class CustomStreamingResponse(Response):
                 print(f"{self.is_first_message=}")
                 continue
 
-            if len(buffer) > 256:
+            if len(buffer) > 512:
                 full_response = decode_or_replace_invalid_chars(buffer, self.charset)
 
                 # Remove specified patterns from the full response
                 for pattern in self.patterns_to_remove:
-                    full_response = re.sub(pattern, "", full_response)
+                    full_response = re.sub(pattern, "", full_response, re.MULTILINE)
 
                 raise_error = False
                 # Check for error patterns in the full response
                 try:
                     if re.search(self.error_patterns, full_response):
-                        print("Raising not a valid response error")
+                        print(f"Raising not a valid response error {full_response=}")
                         raise_error = True
                     elif full_response == "Assistant:":
-                        print("Full response == Assistant:")
+                        print("Full response == Assistant")
                         raise_error = True
                     elif "/******" in full_response:
-                        print("Response contains special characters /******")
+                        print(
+                            f"Response contains special characters /****** {full_response=}"
+                        )
                         raise_error = True
+                    elif self.last_message and "test for llm throw" in str(
+                        self.last_message
+                    ):
+                        print("Testing for LLM throw error.")
+
+                        random_integer = random.randint(0, 1)
+                        if random_integer == 1:
+                            raise_error = True
                 finally:
                     if raise_error:
-                        await send(
-                            {
-                                "type": "http.response.body",
-                                "body": json.dumps(
-                                    {
-                                        "error": True,
-                                        "content": "The response is not valid. Please click the regenerate button to try again.",
-                                    }
-                                ).encode(self.charset),
-                                "more_body": False,
-                            }
+                        self.status_code = 400
+                        await self.send_http_headers_to_client(
+                            send, status_code=self.status_code
                         )
+                        await self.send_response_error_message_to_client(send)
                         return
                         # Send a message to the frontend indicating that the response is not valid
-                        await send(
-                            {
-                                "type": "http.response.body",
-                                "body": json.dumps(
-                                    {"error": "Not a valid response. Retrying..."}
-                                ).encode(self.charset),
-                                "more_body": True,
-                            }
-                        )
-                        raise NotAValidResponseError(full_response)
+                        raise NotAValidResponseError(full_response=full_response)
+
+                await self.send_http_headers_to_client(
+                    send, status_code=self.status_code
+                )
 
                 # Encode the sanitized response back to bytes
                 sanitized_response = full_response.encode(self.charset)
@@ -163,6 +158,9 @@ class CustomStreamingResponse(Response):
 
                 buffer = bytearray()
                 total_buffer_len = 0
+
+        # Guard clause for if the buffer never exceed 512 characters.
+        await self.send_http_headers_to_client(send, status_code=self.status_code)
 
         print(f"Length of buffer is {len(buffer)=} and {self.is_first_message=}")
 
@@ -185,6 +183,38 @@ class CustomStreamingResponse(Response):
             {
                 "type": "http.response.body",
                 "body": sanitized_response,
+                "more_body": False,
+            }
+        )
+
+    async def send_http_headers_to_client(
+        self, send: Send, status_code: int = 200
+    ) -> None:
+        """Send the http headers to the client."""
+        if self.http_headers_sent:
+            return
+
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status_code,
+                "headers": self.raw_headers,
+            }
+        )
+
+        self.http_headers_sent = True
+
+    async def send_response_error_message_to_client(self, send: Send) -> None:
+        """Send the response error message to the client frontend."""
+        await send(
+            {
+                "type": "http.response.body",
+                "body": json.dumps(
+                    {
+                        "error": True,
+                        "content": "The response is not valid. Please click the regenerate button to try again.",
+                    }
+                ).encode(self.charset),
                 "more_body": False,
             }
         )

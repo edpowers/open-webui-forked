@@ -64,6 +64,10 @@
 	let generatingImage = false;
 
 	let showRateComment = false;
+	// For the advice model.
+	let showAdviceModal = false;
+	let name = '';
+	let description = '';
 
 	$: tokens = marked.lexer(sanitizeResponseContent(message.content));
 
@@ -81,6 +85,18 @@
 
 	$: if (message) {
 		renderStyling();
+	}
+
+	function toggleModal() {
+		showAdviceModal = !showAdviceModal;
+	};
+
+	function handleSubmit() {
+		const name = document.getElementById('name').value;
+		const description = document.getElementById('description').value;
+		console.log(`Name: ${name}, Description: ${description}`);
+		// Add your form submission logic here
+		window.close(); // Close the modal after submission
 	}
 
 	const renderStyling = async () => {
@@ -133,6 +149,33 @@
 	};
 
 	const renderLatex = () => {
+		let chatMessageElements = document
+			.getElementById(`message-${message.id}`)
+			?.getElementsByClassName('chat-assistant');
+
+		if (chatMessageElements) {
+			for (const element of chatMessageElements) {
+				auto_render(element as HTMLElement, {
+					// customized options
+					// • auto-render specific keys, e.g.:
+					delimiters: [
+						{ left: '$$', right: '$$', display: false },
+						{ left: '$ ', right: ' $', display: false },
+						{ left: '\\(', right: '\\)', display: false },
+						{ left: '\\[', right: '\\]', display: false },
+						{ left: '[ ', right: ' ]', display: false }
+					],
+					// • rendering keys, e.g.:
+					throwOnError: false
+				});
+			}
+		} else {
+			// console.error(`No elements found with id message-${message.id}`);
+			console.log(`No elements found with id message-${message.id}`);
+		}
+	};
+
+	const __renderLatex = () => {
 		let chatMessageElements = document
 			.getElementById(`message-${message.id}`)
 			?.getElementsByClassName('chat-assistant');
@@ -316,11 +359,18 @@
 		generatingImage = false;
 	};
 
+	// Reactive statement to call regenerateResponse if regenerateAttempted is false
+	$: if (message?.error === true && !message.regenerateAttempted) {
+		console.log('Calling regenerateResponse'); // Log before calling the function
+		regenerateResponse();
+	}
+
 	onMount(async () => {
 		await tick();
 		renderStyling();
 	});
 </script>
+
 
 {#key message.id}
 	<div class=" flex w-full message-{message.id}" id="message-{message.id}">
@@ -399,10 +449,8 @@
 							<div class="w-full">
 								{#if message?.error === true}
 									{#if !message.regenerateAttempted}
-										<script>
-										// Automatically trigger the regenerateResponse function
-										regenerateResponse();
-										</script>
+										<!-- Display a message or placeholder while regenerating -->
+										<p>Regenerating response...</p>
 							  		{:else}
 									  <div class="flex mt-2 mb-4 space-x-2 border px-4 py-3 border-red-800 bg-red-800/30 font-medium rounded-lg">
 										<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 self-center">
@@ -875,8 +923,63 @@
 												</button>
 											</Tooltip>
 										{/if}
+
+										<Tooltip content="Seek Legal Counsel" placement="bottom">
+											<button
+											  type="button"
+											  class="{isLastMessage
+												? 'visible'
+												: 'invisible group-hover:visible'} p-1 rounded dark:hover:text-white hover:text-black transition"
+											  on:click={toggleModal}
+											>
+											  <svg
+												xmlns="http://www.w3.org/2000/svg"
+												fill="currentColor"
+												viewBox="0 0 100 100"
+												stroke-width="2"
+												stroke="currentColor"
+												class="w-4 h-4"
+											  >
+												<path d="M85,85C85,82.239,82.761,80,80,80L60,80C57.239,80,55,82.239,55,85C52.239,85,50,87.239,50,90L90,90C90,87.239,87.761,85,85,85Z" stroke="none"></path>
+												<path d="M60,45C62.761,45,65,42.761,65,40L67.941,42.941C69.259,44.259,71.047,45,72.912,45L72.912,45C72.65,45.577,72.5,46.088,72.5,46.5C72.5,48.433,74.067,50,76,50C79.5,50,90,39.5,90,36C90,34.067,88.433,32.5,86.5,32.5C86.088,32.5,85.577,32.65,85,32.912L85,32.912C85,31.048,84.259,29.259,82.941,27.941L72.059,17.059C70.741,15.741,68.953,15,67.088,15L67.088,15C67.35,14.423,67.5,13.912,67.5,13.5C67.5,11.567,65.933,10,64,10C60.5,10,50,20.5,50,24C50,25.933,51.567,27.5,53.5,27.5C53.912,27.5,54.423,27.35,55,27.088L55,27.088C55,28.952,55.741,30.741,57.059,32.059L60,35C57.239,35,55,37.239,55,40C53.222,40,50.63,43,49.006,45.874C42.833,51.315,10,80.47,10,85C10,87.761,12.239,90,15,90C19.53,90,48.685,57.167,54.126,50.994C57,49.37,60,46.778,60,45Z" stroke="none"></path>
+											  </svg>
+											</button>
+										  </Tooltip>
 									</div>
 								{/if}
+
+								<!-- Modal -->
+								{#if showAdviceModal}
+								<div class="modal">
+									<div class="modal-content">
+									  <div class="modal-header">Seek Legal Counsel</div>
+									  <div class="mb-4">
+										<label for="name">Name:</label>
+										<input type="text" id="name" class="w-full p-2 border rounded">
+									  </div>
+									  <div class="mb-4">
+										<label for="description">Brief Description:</label>
+										<textarea id="description" class="w-full p-2 border rounded"></textarea>
+									  </div>
+									  <div class="modal-footer">
+										<button
+											class="button button-cancel"
+											on:click={() => {
+												toggleModal();
+											}}
+
+										>Cancel</button>
+										<button
+											class="button button-submit"
+											on:click={() => {
+												handleSubmit();
+											}}
+										>Submit</button>
+									  </div>
+									</div>
+								  </div>
+								{/if}
+
 
 								{#if showRateComment}
 									<RateComment
@@ -906,4 +1009,57 @@
 		-ms-overflow-style: none; /* IE and Edge */
 		scrollbar-width: none; /* Firefox */
 	}
+
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #6c757d; /* Solid background color */
+    --darkreader-neutral-background: #2a2928;
+    --darkreader-neutral-text: #b8b1a5;
+    --darkreader-selection-background: #284f7e;
+    --darkreader-selection-text: #c4bdb2;
+  }
+
+.modal-content {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    width: 300px;
+    color: var(--darkreader-neutral-text);
+    font-family: -apple-system, Arimo, ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji", Segoe UI Symbol, "Noto Color Emoji";
+  }
+
+.modal-header {
+	font-size: 1.5em;
+	margin-bottom: 1em;
+}
+
+.modal-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.5em;
+}
+
+.button {
+	padding: 0.5em 1em;
+	border: none;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.button-cancel {
+	background: #6c757d;
+	color: white;
+}
+
+.button-submit {
+	background: #007bff;
+	color: white;
+}
 </style>
